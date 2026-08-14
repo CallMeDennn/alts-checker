@@ -195,7 +195,7 @@ try {
                 </Border>
                 <TextBlock x:Name="arrL" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                  <TextBlock Text="SCANSIONE COMPLETA" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
+                  <TextBlock Text="Logs di Minecraft" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
                   <TextBlock Text="Log 'Setting user:' (anche .gz) + usernamecache, usercache, launcher_profiles/accounts, shig.inima" Foreground="#8b98ab" FontSize="11"/>
                 </StackPanel>
               </DockPanel>
@@ -698,7 +698,7 @@ function Show-Tab($which) {
   }
   else {
     $h = New-Object System.Windows.Controls.TextBlock
-    $h.Text = ([string][char]0x25BC) + '   JOURNAL (file eliminati):   (' + $script:journalLines.Count + ')'
+    $h.Text = ([string][char]0x25BC) + '   Journal (file eliminati):   (' + $script:journalLines.Count + ')'
     $h.Foreground = $txt; $h.FontSize = 13; $h.FontWeight = [System.Windows.FontWeights]::Bold
     $h.Margin = '4,6,4,2'
     $panel.Children.Add($h) | Out-Null
