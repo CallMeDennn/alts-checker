@@ -6,13 +6,15 @@ $script:accounts = New-Object System.Collections.Generic.List[string]
 $script:seen = New-Object System.Collections.Generic.HashSet[string]
 $script:sources = New-Object System.Collections.Generic.List[string]
 $script:nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
+$script:scanPS = $null
+$script:scanRS = $null
+$script:scanAsync = $null
+$script:scanTimer = $null
 
 function Brush($hex) { return (New-Object System.Windows.Media.BrushConverter).ConvertFromString($hex) }
 
-function Read-TextFile($path) {
-  try { return [System.IO.File]::ReadAllText($path) } catch { return $null }
-}
-
+$scanCode = @'
+function Read-TextFile($path) { try { return [System.IO.File]::ReadAllText($path) } catch { return $null } }
 function Read-GzFile($path) {
   try {
     $fs = [System.IO.File]::OpenRead($path)
@@ -23,41 +25,35 @@ function Read-GzFile($path) {
     return $t
   } catch { return $null }
 }
-
-function Invoke-Scan {
-  $script:accounts = New-Object System.Collections.Generic.List[string]
-  $script:seen = New-Object System.Collections.Generic.HashSet[string]
-  $script:sources = New-Object System.Collections.Generic.List[string]
-  $script:nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
-  $mc = Join-Path $env:APPDATA '.minecraft'
-  $logsDir = Join-Path $mc 'logs'
-
-  if (Test-Path -LiteralPath $logsDir) {
-    $files = @(Get-ChildItem -LiteralPath $logsDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.log$' -or $_.Name -match '\.log\.gz$' })
-    foreach ($f in $files) {
-      $script:sources.Add($f.FullName) | Out-Null
-      $text = if ($f.Name.EndsWith('.gz')) { Read-GzFile $f.FullName } else { Read-TextFile $f.FullName }
-      if ($text) {
-        $ms = [regex]::Matches($text, '(?m)Setting user:\s*(\S+)')
-        foreach ($m in $ms) {
-          $nick = $m.Groups[1].Value.Trim()
-          $key = $nick.ToLower()
-          if ($nick -and $script:seen.Add($key)) {
-            $script:accounts.Add($nick) | Out-Null
-          }
-          if ($nick) {
-            if (-not $script:nickPaths.ContainsKey($key)) {
-              $script:nickPaths[$key] = New-Object 'System.Collections.Generic.List[string]'
-            }
-            if (-not $script:nickPaths[$key].Contains($f.FullName)) {
-              $script:nickPaths[$key].Add($f.FullName) | Out-Null
-            }
-          }
+$accounts = New-Object System.Collections.Generic.List[string]
+$seen = New-Object System.Collections.Generic.HashSet[string]
+$sources = New-Object System.Collections.Generic.List[string]
+$nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
+$mc = Join-Path $env:APPDATA '.minecraft'
+$logsDir = Join-Path $mc 'logs'
+if (Test-Path -LiteralPath $logsDir) {
+  $files = @(Get-ChildItem -LiteralPath $logsDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.log$' -or $_.Name -match '\.log\.gz$' })
+  foreach ($f in $files) {
+    $sources.Add($f.FullName) | Out-Null
+    $text = if ($f.Name.EndsWith('.gz')) { Read-GzFile $f.FullName } else { Read-TextFile $f.FullName }
+    if ($text) {
+      $ms = [regex]::Matches($text, '(?m)Setting user:\s*(\S+)')
+      foreach ($m in $ms) {
+        $nick = $m.Groups[1].Value.Trim()
+        $key = $nick.ToLower()
+        if ($nick -and $seen.Add($key)) { $accounts.Add($nick) | Out-Null }
+        if ($nick) {
+          if (-not $nickPaths.ContainsKey($key)) { $nickPaths[$key] = New-Object 'System.Collections.Generic.List[string]' }
+          if (-not $nickPaths[$key].Contains($f.FullName)) { $nickPaths[$key].Add($f.FullName) | Out-Null }
         }
       }
     }
   }
 }
+$np = @{}
+foreach ($k in $nickPaths.Keys) { $np[$k] = @($nickPaths[$k]) }
+@{ accounts = @($accounts); sources = @($sources); nickPaths = $np }
+'@
 
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -104,6 +100,7 @@ function Invoke-Scan {
       </DockPanel>
       <Rectangle Height="1" Fill="#1e293b" Margin="0,12,0,0"/>
     </StackPanel>
+
     <Grid x:Name="pnlHome" Grid.Row="1" Margin="26,6,26,6">
       <Border Background="#0f172a" CornerRadius="12" BorderBrush="#1e293b" BorderThickness="1">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -151,6 +148,22 @@ function Invoke-Scan {
         </ScrollViewer>
       </Border>
     </Grid>
+
+    <Grid x:Name="pnlScan" Grid.Row="1" Margin="26,6,26,6" Visibility="Collapsed">
+      <Border Background="#0f172a" CornerRadius="12" BorderBrush="#1e293b" BorderThickness="1">
+        <Grid>
+          <TextBlock Text="Scanning..." Foreground="#8b98ab" FontSize="12" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,14,0,0"/>
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Grid x:Name="spinGrid" Width="70" Height="70" HorizontalAlignment="Center">
+              <Ellipse Width="70" Height="70" Stroke="#38bdf8" StrokeThickness="6" StrokeDashArray="25.1 8.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="Transparent"/>
+            </Grid>
+            <TextBlock x:Name="txtScanStatus" Text="Minecraft Scan: cartella logs..." Foreground="#8b98ab" FontSize="12" HorizontalAlignment="Center" Margin="0,18,0,0"/>
+          </StackPanel>
+          <Button x:Name="btnCancel" Content="Cancel" Width="120" Height="34" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,20" Style="{StaticResource DarkBtn}" FontSize="12"/>
+        </Grid>
+      </Border>
+    </Grid>
+
     <Grid x:Name="pnlResults" Grid.Row="1" Margin="26,6,26,6" Visibility="Collapsed">
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto"/>
@@ -191,52 +204,168 @@ function C($name) { return $window.FindName($name) }
 
 function Show-Home {
   (C 'pnlResults').Visibility = [System.Windows.Visibility]::Collapsed
+  (C 'pnlScan').Visibility = [System.Windows.Visibility]::Collapsed
   (C 'pnlHome').Visibility = [System.Windows.Visibility]::Visible
 }
 
-function New-PathRow($path) {
-  $tb = New-Object System.Windows.Controls.TextBlock
-  $tb.Text = ([string][char]0x2022) + '  ' + $path
-  $tb.Foreground = Brush '#8b98ab'
-  $tb.FontSize = 11
-  $tb.Margin = '34,3,8,3'
-  $tb.TextWrapping = [System.Windows.TextWrapping]::Wrap
-  $tb.Cursor = [System.Windows.Input.Cursors]::Hand
+function Start-Spinner {
+  $grid = C 'spinGrid'
+  if ($null -eq $grid.RenderTransform -or $grid.RenderTransform -isnot [System.Windows.Media.RotateTransform]) {
+    $grid.RenderTransform = New-Object System.Windows.Media.RotateTransform(0, 35, 35)
+  }
+  $anim = New-Object System.Windows.Media.Animation.DoubleAnimation(0, 360, [TimeSpan]::FromMilliseconds(900))
+  $anim.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+  $grid.RenderTransform.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $anim)
+}
+
+function Stop-Spinner {
+  $grid = C 'spinGrid'
+  if ($grid.RenderTransform -is [System.Windows.Media.RotateTransform]) {
+    $grid.RenderTransform.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $null)
+  }
+}
+
+function Cleanup-ScanResources {
+  try { if ($script:scanPS) { $script:scanPS.Dispose() } } catch { }
+  try { if ($script:scanRS) { $script:scanRS.Close() } } catch { }
+  $script:scanPS = $null; $script:scanRS = $null; $script:scanAsync = $null
+}
+
+function Apply-ScanResults($data) {
+  $script:accounts = New-Object System.Collections.Generic.List[string]
+  $script:seen = New-Object System.Collections.Generic.HashSet[string]
+  $script:sources = New-Object System.Collections.Generic.List[string]
+  $script:nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
+  foreach ($n in @($data['accounts'])) {
+    if ($n) {
+      $script:accounts.Add($n) | Out-Null
+      $script:seen.Add($n.ToLower()) | Out-Null
+    }
+  }
+  foreach ($s in @($data['sources'])) { $script:sources.Add($s) | Out-Null }
+  $np = $data['nickPaths']
+  if ($np) {
+    foreach ($k in $np.Keys) {
+      $lst = New-Object 'System.Collections.Generic.List[string]'
+      foreach ($p in @($np[$k])) { $lst.Add($p) | Out-Null }
+      $script:nickPaths[$k] = $lst
+    }
+  }
+}
+
+function Start-MinecraftScan {
+  if ($script:scanTimer -and $script:scanTimer.IsEnabled) { return }
+  (C 'pnlHome').Visibility = [System.Windows.Visibility]::Collapsed
+  (C 'pnlResults').Visibility = [System.Windows.Visibility]::Collapsed
+  (C 'pnlScan').Visibility = [System.Windows.Visibility]::Visible
+  (C 'txtScanStatus').Text = 'Minecraft Scan: cartella logs (%APPDATA%\.minecraft\logs)...'
+  Start-Spinner
+
+  $script:scanPS = [powershell]::Create()
+  $script:scanPS.AddScript($scanCode) | Out-Null
+  $script:scanRS = [runspacefactory]::CreateRunspace()
+  $script:scanRS.Open()
+  $script:scanPS.Runspace = $script:scanRS
+  $script:scanAsync = $script:scanPS.BeginInvoke()
+
+  $script:scanTimer = New-Object System.Windows.Threading.DispatcherTimer
+  $script:scanTimer.Interval = [TimeSpan]::FromMilliseconds(200)
+  $script:scanTimer.Add_Tick({
+    if ($script:scanAsync -and $script:scanAsync.IsCompleted) {
+      $script:scanTimer.Stop()
+      $ok = $true; $data = $null
+      try {
+        $out = $script:scanPS.EndInvoke($script:scanAsync)
+        if ($out -and $out.Count -gt 0) {
+          $data = $out[0]
+          if ($data -is [System.Management.Automation.PSObject]) { $data = $data.BaseObject }
+        } else { $ok = $false }
+      } catch { $ok = $false }
+      Cleanup-ScanResources
+      Stop-Spinner
+      (C 'pnlScan').Visibility = [System.Windows.Visibility]::Collapsed
+      if ($ok -and $data) {
+        Apply-ScanResults $data
+        (C 'pnlResults').Visibility = [System.Windows.Visibility]::Visible
+        Show-Tab 'acc'
+      } else {
+        [System.Windows.MessageBox]::Show('Errore durante la scansione dei log.', 'Errore', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+        Show-Home
+      }
+    }
+  })
+  $script:scanTimer.Start()
+}
+
+function Cancel-Scan {
+  if ($script:scanTimer) { $script:scanTimer.Stop() }
+  try { if ($script:scanPS) { $script:scanPS.Stop() } } catch { }
+  Cleanup-ScanResources
+  Stop-Spinner
+  Show-Home
+}
+
+function New-LogRow($path) {
+  $dock = New-Object System.Windows.Controls.DockPanel
+  $dock.Margin = '30,3,8,3'
+
+  $btnCopy = New-Object System.Windows.Controls.Button
+  $btnCopy.Content = 'Copy'
+  $btnCopy.Width = 52; $btnCopy.Height = 24; $btnCopy.FontSize = 10
+  $btnCopy.Style = $window.FindResource('DarkBtn')
+  $btnCopy.Margin = '6,0,0,0'
+  [System.Windows.Controls.DockPanel]::SetDock($btnCopy, [System.Windows.Controls.Dock]::Right)
+  [void]$btnCopy.Add_Click({ try { [System.Windows.Clipboard]::SetText($path) } catch { } })
+  [void]$dock.Children.Add($btnCopy)
+
+  $btnOpen = New-Object System.Windows.Controls.Button
+  $btnOpen.Content = 'Open'
+  $btnOpen.Width = 52; $btnOpen.Height = 24; $btnOpen.FontSize = 10
+  $btnOpen.Style = $window.FindResource('DarkBtn')
+  [System.Windows.Controls.DockPanel]::SetDock($btnOpen, [System.Windows.Controls.Dock]::Right)
+  [void]$btnOpen.Add_Click({
+    try { Start-Process -LiteralPath $path }
+    catch { try { Start-Process notepad.exe -ArgumentList "`"$path`"" } catch { } }
+  })
+  [void]$dock.Children.Add($btnOpen)
+
+  $left = New-Object System.Windows.Controls.StackPanel
+  $left.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+  $left.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $lbl = New-Object System.Windows.Controls.TextBlock
+  $lbl.Text = 'Log File'; $lbl.Foreground = Brush '#64748b'; $lbl.FontSize = 11
+  $sep = New-Object System.Windows.Controls.TextBlock
+  $sep.Text = '  |  '; $sep.Foreground = Brush '#334155'; $sep.FontSize = 11
+  $pth = New-Object System.Windows.Controls.TextBlock
+  $pth.Text = $path; $pth.Foreground = Brush '#8b98ab'; $pth.FontSize = 11
+  $pth.TextWrapping = [System.Windows.TextWrapping]::Wrap
+  [void]$left.Children.Add($lbl); [void]$left.Children.Add($sep); [void]$left.Children.Add($pth)
+  [void]$dock.Children.Add($left)
 
   $cm = New-Object System.Windows.Controls.ContextMenu
   $cm.Background = Brush '#0f172a'
   $cm.BorderBrush = Brush '#1e293b'
-
   $miCopy = New-Object System.Windows.Controls.MenuItem
-  $miCopy.Header = 'Copia percorso'
-  $miCopy.Foreground = Brush '#e5e7eb'
-  [void]$miCopy.Add_Click({
-    try { [System.Windows.Clipboard]::SetText($path) } catch { }
-  })
-
+  $miCopy.Header = 'Copia percorso'; $miCopy.Foreground = Brush '#e5e7eb'
+  [void]$miCopy.Add_Click({ try { [System.Windows.Clipboard]::SetText($path) } catch { } })
   $miOpen = New-Object System.Windows.Controls.MenuItem
-  $miOpen.Header = 'Apri file'
-  $miOpen.Foreground = Brush '#e5e7eb'
+  $miOpen.Header = 'Apri file'; $miOpen.Foreground = Brush '#e5e7eb'
   [void]$miOpen.Add_Click({
     try { Start-Process -LiteralPath $path }
-    catch {
-      try { Start-Process notepad.exe -ArgumentList "`"$path`"" } catch { }
-    }
+    catch { try { Start-Process notepad.exe -ArgumentList "`"$path`"" } catch { } }
   })
-
   $miFolder = New-Object System.Windows.Controls.MenuItem
-  $miFolder.Header = 'Apri cartella'
-  $miFolder.Foreground = Brush '#e5e7eb'
-  [void]$miFolder.Add_Click({
-    try { Start-Process explorer.exe -ArgumentList "/select,`"$path`"" } catch { }
+  $miFolder.Header = 'Apri cartella'; $miFolder.Foreground = Brush '#e5e7eb'
+  [void]$miFolder.Add_Click({ try { Start-Process explorer.exe -ArgumentList "/select,`"$path`"" } catch { } })
+  [void]$cm.Items.Add($miCopy); [void]$cm.Items.Add($miOpen); [void]$cm.Items.Add($miFolder)
+
+  [void]$dock.Add_MouseRightButtonUp({
+    $cm.PlacementTarget = $dock
+    $cm.Placement = [System.Windows.Controls.Primitives.PlacementMode]::MousePoint
+    $cm.IsOpen = $true
   })
 
-  [void]$cm.Items.Add($miCopy)
-  [void]$cm.Items.Add($miOpen)
-  [void]$cm.Items.Add($miFolder)
-  $tb.ContextMenu = $cm
-
-  return $tb
+  return $dock
 }
 
 function Add-NickRow($nick, $panel) {
@@ -251,10 +380,22 @@ function Add-NickRow($nick, $panel) {
   $header.Cursor = [System.Windows.Input.Cursors]::Hand
 
   $detail = New-Object System.Windows.Controls.StackPanel
-  $detail.Margin = '12,0,8,4'
+  $detail.Margin = '26,0,8,6'
   $detail.Visibility = [System.Windows.Visibility]::Collapsed
-  foreach ($p in $paths) {
-    [void]$detail.Children.Add((New-PathRow $p))
+
+  if (@($paths).Count -gt 0) {
+    $pc = New-Object System.Windows.Controls.StackPanel
+    $pc.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+    $pc.Margin = '30,6,8,2'
+    $t1 = New-Object System.Windows.Controls.TextBlock
+    $t1.Text = 'Persistence Check'; $t1.Foreground = Brush '#fbbf24'; $t1.FontSize = 11; $t1.FontWeight = [System.Windows.FontWeights]::Bold
+    $t2 = New-Object System.Windows.Controls.TextBlock
+    $t2.Text = '  (This username was found in the past on this PC)'; $t2.Foreground = Brush '#64748b'; $t2.FontSize = 10
+    [void]$pc.Children.Add($t1); [void]$pc.Children.Add($t2)
+    [void]$detail.Children.Add($pc)
+    foreach ($p in @($paths)) {
+      [void]$detail.Children.Add((New-LogRow $p))
+    }
   }
 
   [void]$header.Add_MouseLeftButtonUp({
@@ -273,7 +414,7 @@ function Add-NickRow($nick, $panel) {
 
 function Show-Tab($which) {
   $accent = Brush '#38bdf8'; $darktxt = Brush '#04121f'; $btnbg = Brush '#16233a'
-  $sub = Brush '#8b98ab'; $green = Brush '#4ade80'; $txt = Brush '#e5e7eb'
+  $sub = Brush '#8b98ab'; $txt = Brush '#e5e7eb'
   $acc = C 'btnTabAcc'; $for = C 'btnTabFor'
   if ($which -eq 'acc') {
     $acc.Background = $accent; $acc.Foreground = $darktxt
@@ -319,13 +460,6 @@ function Show-Tab($which) {
   }
 }
 
-function Run-Analysis {
-  Invoke-Scan
-  (C 'pnlHome').Visibility = [System.Windows.Visibility]::Collapsed
-  (C 'pnlResults').Visibility = [System.Windows.Visibility]::Visible
-  Show-Tab 'acc'
-}
-
 function Run-Journal {
   $cmd = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
   try {
@@ -361,12 +495,14 @@ function Show-Info {
 }
 
 (C 'btnInfo').Add_Click({ Show-Info })
-(C 'rowLogs').Add_MouseLeftButtonUp({ Run-Analysis })
-(C 'btnAnalyze').Add_Click({ Run-Analysis })
+(C 'rowLogs').Add_MouseLeftButtonUp({ Start-MinecraftScan })
+(C 'btnAnalyze').Add_Click({ Start-MinecraftScan })
+(C 'btnCancel').Add_Click({ Cancel-Scan })
 (C 'rowJournal').Add_MouseLeftButtonUp({ Run-Journal })
 (C 'rowCestino').Add_MouseLeftButtonUp({ Open-Cestino })
 (C 'btnBack').Add_Click({ Show-Home })
 (C 'btnTabAcc').Add_Click({ Show-Tab 'acc' })
 (C 'btnTabFor').Add_Click({ Show-Tab 'for' })
+$window.Add_Closed({ try { if ($script:scanPS) { $script:scanPS.Stop() } } catch { } })
 
 $window.ShowDialog() | Out-Null
