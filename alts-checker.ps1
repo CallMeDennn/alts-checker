@@ -110,7 +110,11 @@ function Invoke-Scan {
               </StackPanel>
             </DockPanel>
           </Border>
-          <Button x:Name="btnAnalyze" Content="Analizza dati caricati" Height="42" Margin="0,6,0,0" Style="{StaticResource DarkBtn}" FontSize="13" FontWeight="Bold"/>
+          <Button x:Name="btnAnalyze" Content="Analizza dati caricati" Height="42" Margin="0,6,0,10" Style="{StaticResource DarkBtn}" FontSize="13" FontWeight="Bold"/>
+          <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+            <Button x:Name="btnJournal" Content="Journal" Width="120" Height="38" Style="{StaticResource DarkBtn}" FontSize="12" FontWeight="Bold" Margin="0,0,8,0"/>
+            <Button x:Name="btnCestino" Content="Cestino" Width="120" Height="38" Style="{StaticResource DarkBtn}" FontSize="12" FontWeight="Bold"/>
+          </StackPanel>
         </StackPanel>
       </Border>
     </Grid>
@@ -209,6 +213,15 @@ function Run-Analysis {
   Show-Tab 'acc'
 }
 
+function Run-Journal {
+  $cmd = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
+  Start-Process cmd -ArgumentList "/k", $cmd
+}
+
+function Open-Cestino {
+  Start-Process "C:\`$Recycle.Bin"
+}
+
 function Show-Info {
   [xml]$ix = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -229,6 +242,8 @@ function Show-Info {
 (C 'btnInfo').Add_Click({ Show-Info })
 (C 'rowLogs').Add_MouseLeftButtonUp({ Run-Analysis })
 (C 'btnAnalyze').Add_Click({ Run-Analysis })
+(C 'btnJournal').Add_Click({ Run-Journal })
+(C 'btnCestino').Add_Click({ Open-Cestino })
 (C 'btnBack').Add_Click({ Show-Home })
 (C 'btnTabAcc').Add_Click({ Show-Tab 'acc' })
 (C 'btnTabFor').Add_Click({ Show-Tab 'for' })
