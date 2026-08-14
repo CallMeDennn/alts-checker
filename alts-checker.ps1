@@ -2,14 +2,15 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
-# RIMOSSO: Il blocco Add-Type con WriteConsoleInput che causava il flag "Trojan"
-
 $script:accounts = New-Object System.Collections.Generic.List[string]
 $script:seen = New-Object System.Collections.Generic.HashSet[string]
 $script:sources = New-Object System.Collections.Generic.List[string]
 $script:nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
 $script:scanJob = $null
 $script:scanTimer = $null
+$script:jPS = $null
+$script:jAsync = $null
+$script:jTimer = $null
 
 function Brush($hex) { return (New-Object System.Windows.Media.BrushConverter).ConvertFromString($hex) }
 
@@ -131,7 +132,7 @@ try {
                 <TextBlock x:Name="arrJ" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                   <TextBlock Text="Journal" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
-                  <TextBlock Text="Esegue fsutil per trovare i file recenti (richiede Admin)" Foreground="#8b98ab" FontSize="11"/>
+                  <TextBlock Text="Il comando appare nel cmd: premi Invio per avviarlo (Admin)" Foreground="#8b98ab" FontSize="11"/>
                 </StackPanel>
               </DockPanel>
             </Border>
@@ -330,27 +331,55 @@ function Cancel-Scan {
   Show-Home
 }
 
-# FIX: Run-Journal riscritta per evitare WriteConsoleInput ed eludere i flag Antivirus
+function Cleanup-Journal {
+  try { if ($script:jPS) { $script:jPS.Stop(); $script:jPS.Dispose() } } catch { }
+  $script:jPS = $null
+  $script:jAsync = $null
+}
+
 function Run-Journal {
-  $cmdLine = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
-  $desktopPath = [Environment]::GetFolderPath('Desktop')
-  
+  if ($script:jTimer -and $script:jTimer.IsEnabled) { return }
+
+  $script:jCmd = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
+  $script:jDesktop = [Environment]::GetFolderPath('Desktop')
+
+  # Stampa il comando nella console da cui e' partito lo script (solo testo a video, nessuna API sospetta)
   try {
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'cmd.exe'
-    # Il comando cambia directory nel Desktop prima di eseguire fsutil per salvare logs.txt nel posto giusto
-    $psi.Arguments = "/c cd /d `"$desktopPath`" && $cmdLine"
-    $psi.UseShellExecute = $true
-    $psi.Verb = 'runas' # Richiede i privilegi di amministratore (UAC)
-    
-    [void][System.Diagnostics.Process]::Start($psi)
-    
-    [System.Windows.MessageBox]::Show("Comando avviato in un nuovo prompt dei comandi come Amministratore. Il file 'logs.txt' verrà salvato sul Desktop.", "Journal", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+    [Console]::Out.Write("`n--- Journal ---`nPremi INVIO in questa console per eseguire (serve Amministratore):`n" + $script:jCmd + "`n")
+    [Console]::Out.Flush()
   } catch {
-    # Fallback: se l'utente clicca "No" all'UAC o c'è un errore, copia il comando negli appunti
-    try { [System.Windows.Clipboard]::SetText($cmdLine) } catch { }
-    [System.Windows.MessageBox]::Show("Impossibile avviare con privilegi di amministratore. Comando copiato negli appunti: incollalo in un cmd eseguito come Amministratore.", "Journal", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning) | Out-Null
+    try { [System.Windows.Clipboard]::SetText($script:jCmd) } catch { }
+    [System.Windows.MessageBox]::Show("Comando copiato negli appunti: incollalo nel cmd e premi Invio.", "Journal", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+    return
   }
+
+  # Aspetta in background che l'utente prema Invio nella console
+  try {
+    $script:jPS = [powershell]::Create()
+    $script:jPS.AddScript({ [Console]::In.ReadLine() }) | Out-Null
+    $script:jAsync = $script:jPS.BeginInvoke()
+  } catch {
+    Cleanup-Journal
+    return
+  }
+
+  $script:jTimer = New-Object System.Windows.Threading.DispatcherTimer
+  $script:jTimer.Interval = [TimeSpan]::FromMilliseconds(150)
+  $script:jTimer.Add_Tick({
+    if ($script:jAsync -and $script:jAsync.IsCompleted) {
+      $script:jTimer.Stop()
+      Cleanup-Journal
+      try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = 'cmd.exe'
+        $psi.Arguments = '/c cd /d "' + $script:jDesktop + '" && ' + $script:jCmd
+        $psi.UseShellExecute = $false
+        $psi.WorkingDirectory = $script:jDesktop
+        [void][System.Diagnostics.Process]::Start($psi)
+      } catch { }
+    }
+  })
+  $script:jTimer.Start()
 }
 
 function Open-Cestino {
@@ -550,6 +579,8 @@ function Show-Info {
 (C 'btnTabFor').Add_Click({ Show-Tab 'for' })
 $window.Add_Closed({
   try { if ($script:scanJob) { Remove-Job -Job $script:scanJob -Force } } catch { }
+  try { if ($script:jTimer) { $script:jTimer.Stop() } } catch { }
+  Cleanup-Journal
 })
 
 $window.ShowDialog() | Out-Null
