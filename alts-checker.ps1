@@ -2,12 +2,40 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
+try {
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class ConIn {
+  [DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int nStdHandle);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool WriteConsoleInput(IntPtr hConsoleInput, INPUT_RECORD[] lpBuffer, uint nLength, out uint lpNumberOfEventsWritten);
+  [StructLayout(LayoutKind.Sequential)] public struct KEY_EVENT_RECORD {
+    public int bKeyDown;
+    public short wRepeatCount;
+    public short wVirtualKeyCode;
+    public short wVirtualScanCode;
+    public char UnicodeChar;
+    public int dwControlKeyState;
+  }
+  [StructLayout(LayoutKind.Explicit)] public struct INPUT_RECORD {
+    [FieldOffset(0)] public short EventType;
+    [FieldOffset(4)] public KEY_EVENT_RECORD KeyEvent;
+  }
+}
+"@
+} catch { }
+
 $script:accounts = New-Object System.Collections.Generic.List[string]
 $script:seen = New-Object System.Collections.Generic.HashSet[string]
 $script:sources = New-Object System.Collections.Generic.List[string]
 $script:nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
 $script:scanJob = $null
 $script:scanTimer = $null
+$script:jPS = $null
+$script:jAsync = $null
+$script:jTimer = $null
+$script:jInjected = $false
+$script:jTickCount = 0
 
 function Brush($hex) { return (New-Object System.Windows.Media.BrushConverter).ConvertFromString($hex) }
 
@@ -129,7 +157,7 @@ try {
                 <TextBlock x:Name="arrJ" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                   <TextBlock Text="Journal" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
-                  <TextBlock Text="Esegue il comando USN journal nella console di avvio" Foreground="#8b98ab" FontSize="11"/>
+                  <TextBlock Text="Incolla il comando nella console: premi Invio per avviarlo" Foreground="#8b98ab" FontSize="11"/>
                 </StackPanel>
               </DockPanel>
             </Border>
@@ -212,10 +240,17 @@ function Show-Home {
 
 function Start-Spinner {
   $grid = C 'spinGrid'
-  $grid.RenderTransform = New-Object System.Windows.Media.RotateTransform(0, 35, 35)
-  $anim = New-Object System.Windows.Media.Animation.DoubleAnimation(0, 360, [TimeSpan]::FromMilliseconds(900))
+  $rt = New-Object System.Windows.Media.RotateTransform
+  $rt.Angle = 0
+  $rt.CenterX = 35
+  $rt.CenterY = 35
+  $grid.RenderTransform = $rt
+  $anim = New-Object System.Windows.Media.Animation.DoubleAnimation
+  $anim.From = 0
+  $anim.To = 360
+  $anim.Duration = New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(900))
   $anim.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
-  $grid.RenderTransform.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $anim)
+  $rt.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $anim)
 }
 
 function Stop-Spinner {
@@ -262,7 +297,6 @@ function Start-MinecraftScan {
   }
 
   if (-not $script:scanJob) {
-    # Fallback sincrono immediato
     $data = $null
     try { $data = & ([scriptblock]::Create($script:scanCode)) } catch { $data = $null }
     Stop-Spinner
@@ -320,6 +354,101 @@ function Cancel-Scan {
   $script:scanJob = $null
   Stop-Spinner
   Show-Home
+}
+
+function Inject-ConsoleText($text) {
+  try {
+    $hIn = [ConIn]::GetStdHandle(-10)
+    if ($hIn -eq [IntPtr]::Zero -or $hIn -eq [IntPtr](-1)) { return $false }
+    $records = New-Object 'System.Collections.Generic.List[ConIn+INPUT_RECORD]'
+    foreach ($ch in $text.ToCharArray()) {
+      $down = New-Object 'ConIn+INPUT_RECORD'
+      $down.EventType = 1
+      $down.KeyEvent.bKeyDown = 1
+      $down.KeyEvent.wRepeatCount = 1
+      $down.KeyEvent.UnicodeChar = $ch
+      $records.Add($down)
+      $up = New-Object 'ConIn+INPUT_RECORD'
+      $up.EventType = 1
+      $up.KeyEvent.bKeyDown = 0
+      $up.KeyEvent.wRepeatCount = 1
+      $up.KeyEvent.UnicodeChar = $ch
+      $records.Add($up)
+    }
+    $arr = $records.ToArray()
+    $written = [uint32]0
+    return [ConIn]::WriteConsoleInput($hIn, $arr, [uint32]$arr.Length, [ref]$written)
+  } catch {
+    return $false
+  }
+}
+
+function Cleanup-Journal {
+  try { if ($script:jPS) { $script:jPS.Stop(); $script:jPS.Dispose() } } catch { }
+  $script:jPS = $null; $script:jAsync = $null
+}
+
+function Run-Journal {
+  if ($script:jTimer -and $script:jTimer.IsEnabled) { return }
+  $cmdLine = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
+
+  # Lettore stdin in background: aspetta che l'utente prema Invio nella console
+  try {
+    $script:jPS = [powershell]::Create()
+    $script:jPS.AddScript({ [Console]::In.ReadLine() }) | Out-Null
+    $script:jAsync = $script:jPS.BeginInvoke()
+  } catch {
+    Cleanup-Journal
+    try { [System.Windows.Clipboard]::SetText($cmdLine) } catch { }
+    [System.Windows.MessageBox]::Show("Comando copiato negli appunti: incollalo nel cmd e premi Invio.", "Journal", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+    return
+  }
+
+  $script:jInjected = $false
+  $script:jTickCount = 0
+  $script:jTimer = New-Object System.Windows.Threading.DispatcherTimer
+  $script:jTimer.Interval = [TimeSpan]::FromMilliseconds(150)
+  $script:jTimer.Add_Tick({
+    if (-not $script:jInjected) {
+      $script:jTickCount++
+      if ($script:jTickCount -ge 3) {
+        $ok = Inject-ConsoleText 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
+        if (-not $ok) {
+          try { [System.Windows.Clipboard]::SetText('fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt') } catch { }
+        }
+        $script:jInjected = $true
+      }
+      return
+    }
+    if ($script:jAsync -and $script:jAsync.IsCompleted) {
+      $script:jTimer.Stop()
+      $line = $null
+      try {
+        $out = $script:jPS.EndInvoke($script:jAsync)
+        if ($out -and $out.Count -gt 0) { $line = $out[0] }
+      } catch { }
+      Cleanup-Journal
+      if ($line) {
+        try {
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = 'cmd.exe'
+          $psi.Arguments = '/c ' + $line
+          $psi.UseShellExecute = $false
+          $psi.WorkingDirectory = [Environment]::GetFolderPath('Desktop')
+          [void][System.Diagnostics.Process]::Start($psi)
+        } catch { }
+      }
+    }
+  })
+  $script:jTimer.Start()
+}
+
+function Open-Cestino {
+  try {
+    Start-Process "C:\`$Recycle.Bin"
+  } catch {
+    Start-Process explorer "C:\`$Recycle.Bin"
+  }
 }
 
 function New-LogRow($path) {
@@ -483,28 +612,6 @@ function Show-Tab($which) {
   }
 }
 
-function Run-Journal {
-  $cmd = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
-  try {
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'cmd.exe'
-    $psi.Arguments = '/k ' + $cmd
-    $psi.UseShellExecute = $false
-    $psi.WorkingDirectory = [Environment]::GetFolderPath('Desktop')
-    [void][System.Diagnostics.Process]::Start($psi)
-  } catch {
-    [System.Windows.MessageBox]::Show("Impossibile eseguire il comando Journal: $($_.Exception.Message)", "Errore", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
-  }
-}
-
-function Open-Cestino {
-  try {
-    Start-Process "C:\`$Recycle.Bin"
-  } catch {
-    Start-Process explorer "C:\`$Recycle.Bin"
-  }
-}
-
 function Show-Info {
   [xml]$ix = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -531,6 +638,10 @@ function Show-Info {
 (C 'btnBack').Add_Click({ Show-Home })
 (C 'btnTabAcc').Add_Click({ Show-Tab 'acc' })
 (C 'btnTabFor').Add_Click({ Show-Tab 'for' })
-$window.Add_Closed({ try { if ($script:scanJob) { Remove-Job -Job $script:scanJob -Force } } catch { } })
+$window.Add_Closed({
+  try { if ($script:scanJob) { Remove-Job -Job $script:scanJob -Force } } catch { }
+  try { if ($script:jTimer) { $script:jTimer.Stop() } } catch { }
+  Cleanup-Journal
+})
 
 $window.ShowDialog() | Out-Null
