@@ -2,6 +2,8 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
+# RIMOSSO: Il blocco Add-Type con WriteConsoleInput che causava il flag "Trojan"
+
 $script:accounts = New-Object System.Collections.Generic.List[string]
 $script:seen = New-Object System.Collections.Generic.HashSet[string]
 $script:sources = New-Object System.Collections.Generic.List[string]
@@ -129,7 +131,7 @@ try {
                 <TextBlock x:Name="arrJ" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                   <TextBlock Text="Journal" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
-                  <TextBlock Text="Esegue il comando USN journal nella console di avvio" Foreground="#8b98ab" FontSize="11"/>
+                  <TextBlock Text="Esegue fsutil per trovare i file recenti (richiede Admin)" Foreground="#8b98ab" FontSize="11"/>
                 </StackPanel>
               </DockPanel>
             </Border>
@@ -212,10 +214,17 @@ function Show-Home {
 
 function Start-Spinner {
   $grid = C 'spinGrid'
-  $grid.RenderTransform = New-Object System.Windows.Media.RotateTransform(0, 35, 35)
-  $anim = New-Object System.Windows.Media.Animation.DoubleAnimation(0, 360, [TimeSpan]::FromMilliseconds(900))
+  $rt = New-Object System.Windows.Media.RotateTransform
+  $rt.Angle = 0
+  $rt.CenterX = 35
+  $rt.CenterY = 35
+  $grid.RenderTransform = $rt
+  $anim = New-Object System.Windows.Media.Animation.DoubleAnimation
+  $anim.From = 0
+  $anim.To = 360
+  $anim.Duration = New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(900))
   $anim.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
-  $grid.RenderTransform.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $anim)
+  $rt.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $anim)
 }
 
 function Stop-Spinner {
@@ -262,7 +271,6 @@ function Start-MinecraftScan {
   }
 
   if (-not $script:scanJob) {
-    # Fallback sincrono immediato
     $data = $null
     try { $data = & ([scriptblock]::Create($script:scanCode)) } catch { $data = $null }
     Stop-Spinner
@@ -320,6 +328,37 @@ function Cancel-Scan {
   $script:scanJob = $null
   Stop-Spinner
   Show-Home
+}
+
+# FIX: Run-Journal riscritta per evitare WriteConsoleInput ed eludere i flag Antivirus
+function Run-Journal {
+  $cmdLine = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
+  $desktopPath = [Environment]::GetFolderPath('Desktop')
+  
+  try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'cmd.exe'
+    # Il comando cambia directory nel Desktop prima di eseguire fsutil per salvare logs.txt nel posto giusto
+    $psi.Arguments = "/c cd /d `"$desktopPath`" && $cmdLine"
+    $psi.UseShellExecute = $true
+    $psi.Verb = 'runas' # Richiede i privilegi di amministratore (UAC)
+    
+    [void][System.Diagnostics.Process]::Start($psi)
+    
+    [System.Windows.MessageBox]::Show("Comando avviato in un nuovo prompt dei comandi come Amministratore. Il file 'logs.txt' verrà salvato sul Desktop.", "Journal", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+  } catch {
+    # Fallback: se l'utente clicca "No" all'UAC o c'è un errore, copia il comando negli appunti
+    try { [System.Windows.Clipboard]::SetText($cmdLine) } catch { }
+    [System.Windows.MessageBox]::Show("Impossibile avviare con privilegi di amministratore. Comando copiato negli appunti: incollalo in un cmd eseguito come Amministratore.", "Journal", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning) | Out-Null
+  }
+}
+
+function Open-Cestino {
+  try {
+    Start-Process "C:\`$Recycle.Bin"
+  } catch {
+    Start-Process explorer "C:\`$Recycle.Bin"
+  }
 }
 
 function New-LogRow($path) {
@@ -483,28 +522,6 @@ function Show-Tab($which) {
   }
 }
 
-function Run-Journal {
-  $cmd = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
-  try {
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'cmd.exe'
-    $psi.Arguments = '/k ' + $cmd
-    $psi.UseShellExecute = $false
-    $psi.WorkingDirectory = [Environment]::GetFolderPath('Desktop')
-    [void][System.Diagnostics.Process]::Start($psi)
-  } catch {
-    [System.Windows.MessageBox]::Show("Impossibile eseguire il comando Journal: $($_.Exception.Message)", "Errore", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
-  }
-}
-
-function Open-Cestino {
-  try {
-    Start-Process "C:\`$Recycle.Bin"
-  } catch {
-    Start-Process explorer "C:\`$Recycle.Bin"
-  }
-}
-
 function Show-Info {
   [xml]$ix = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -531,6 +548,8 @@ function Show-Info {
 (C 'btnBack').Add_Click({ Show-Home })
 (C 'btnTabAcc').Add_Click({ Show-Tab 'acc' })
 (C 'btnTabFor').Add_Click({ Show-Tab 'for' })
-$window.Add_Closed({ try { if ($script:scanJob) { Remove-Job -Job $script:scanJob -Force } } catch { } })
+$window.Add_Closed({
+  try { if ($script:scanJob) { Remove-Job -Job $script:scanJob -Force } } catch { }
+})
 
 $window.ShowDialog() | Out-Null
