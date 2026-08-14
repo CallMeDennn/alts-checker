@@ -11,7 +11,7 @@ $script:scanTimer = $null
 
 function Brush($hex) { return (New-Object System.Windows.Media.BrushConverter).ConvertFromString($hex) }
 
-$scanCode = @'
+$script:scanCode = @'
 try {
   function Read-TextFile($path) { try { return [System.IO.File]::ReadAllText($path) } catch { return $null } }
   function Read-GzFile($path) {
@@ -129,7 +129,7 @@ try {
                 <TextBlock x:Name="arrJ" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                   <TextBlock Text="Journal" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
-                  <TextBlock Text="Apre CMD (Admin) con lettura USN journal + export logs.txt" Foreground="#8b98ab" FontSize="11"/>
+                  <TextBlock Text="Esegue il comando USN journal nella console di avvio" Foreground="#8b98ab" FontSize="11"/>
                 </StackPanel>
               </DockPanel>
             </Border>
@@ -256,9 +256,23 @@ function Start-MinecraftScan {
   Start-Spinner
 
   try {
-    $script:scanJob = Start-Job -ScriptBlock ([scriptblock]::Create($scanCode))
+    $script:scanJob = Start-Job -ScriptBlock ([scriptblock]::Create($script:scanCode))
   } catch {
     $script:scanJob = $null
+  }
+
+  if (-not $script:scanJob) {
+    # Fallback sincrono immediato
+    $data = $null
+    try { $data = & ([scriptblock]::Create($script:scanCode)) } catch { $data = $null }
+    Stop-Spinner
+    (C 'pnlScan').Visibility = [System.Windows.Visibility]::Collapsed
+    if ($data -and -not $data['error']) {
+      Apply-ScanResults $data
+      (C 'pnlResults').Visibility = [System.Windows.Visibility]::Visible
+      Show-Tab 'acc'
+    } else { Show-Home }
+    return
   }
 
   $script:scanTimer = New-Object System.Windows.Threading.DispatcherTimer
@@ -281,8 +295,7 @@ function Start-MinecraftScan {
     $script:scanJob = $null
 
     if (-not $data) {
-      # Fallback sincrono: garantisce comunque il risultato
-      try { $data = & ([scriptblock]::Create($scanCode)) } catch { $data = $null }
+      try { $data = & ([scriptblock]::Create($script:scanCode)) } catch { $data = $null }
     }
 
     Stop-Spinner
@@ -299,22 +312,6 @@ function Start-MinecraftScan {
     }
   })
   $script:scanTimer.Start()
-
-  # Se il job non e' partito, il timer fa comunque il fallback sincrono al primo tick
-  if (-not $script:scanJob) {
-    $script:scanTimer.Stop()
-    $data = $null
-    try { $data = & ([scriptblock]::Create($scanCode)) } catch { $data = $null }
-    Stop-Spinner
-    (C 'pnlScan').Visibility = [System.Windows.Visibility]::Collapsed
-    if ($data -and -not $data['error']) {
-      Apply-ScanResults $data
-      (C 'pnlResults').Visibility = [System.Windows.Visibility]::Visible
-      Show-Tab 'acc'
-    } else {
-      Show-Home
-    }
-  }
 }
 
 function Cancel-Scan {
@@ -335,7 +332,9 @@ function New-LogRow($path) {
   $btnCopy.Style = $window.FindResource('DarkBtn')
   $btnCopy.Margin = '6,0,0,0'
   [System.Windows.Controls.DockPanel]::SetDock($btnCopy, [System.Windows.Controls.Dock]::Right)
-  [void]$btnCopy.Add_Click({ try { [System.Windows.Clipboard]::SetText($path) } catch { } })
+  [void]$btnCopy.Add_Click(({
+    try { [System.Windows.Clipboard]::SetText($path) } catch { }
+  }).GetNewClosure())
   [void]$dock.Children.Add($btnCopy)
 
   $btnOpen = New-Object System.Windows.Controls.Button
@@ -343,10 +342,10 @@ function New-LogRow($path) {
   $btnOpen.Width = 52; $btnOpen.Height = 24; $btnOpen.FontSize = 10
   $btnOpen.Style = $window.FindResource('DarkBtn')
   [System.Windows.Controls.DockPanel]::SetDock($btnOpen, [System.Windows.Controls.Dock]::Right)
-  [void]$btnOpen.Add_Click({
+  [void]$btnOpen.Add_Click(({
     try { Start-Process -LiteralPath $path }
     catch { try { Start-Process notepad.exe -ArgumentList "`"$path`"" } catch { } }
-  })
+  }).GetNewClosure())
   [void]$dock.Children.Add($btnOpen)
 
   $left = New-Object System.Windows.Controls.StackPanel
@@ -367,23 +366,27 @@ function New-LogRow($path) {
   $cm.BorderBrush = Brush '#1e293b'
   $miCopy = New-Object System.Windows.Controls.MenuItem
   $miCopy.Header = 'Copia percorso'; $miCopy.Foreground = Brush '#e5e7eb'
-  [void]$miCopy.Add_Click({ try { [System.Windows.Clipboard]::SetText($path) } catch { } })
+  [void]$miCopy.Add_Click(({
+    try { [System.Windows.Clipboard]::SetText($path) } catch { }
+  }).GetNewClosure())
   $miOpen = New-Object System.Windows.Controls.MenuItem
   $miOpen.Header = 'Apri file'; $miOpen.Foreground = Brush '#e5e7eb'
-  [void]$miOpen.Add_Click({
+  [void]$miOpen.Add_Click(({
     try { Start-Process -LiteralPath $path }
     catch { try { Start-Process notepad.exe -ArgumentList "`"$path`"" } catch { } }
-  })
+  }).GetNewClosure())
   $miFolder = New-Object System.Windows.Controls.MenuItem
   $miFolder.Header = 'Apri cartella'; $miFolder.Foreground = Brush '#e5e7eb'
-  [void]$miFolder.Add_Click({ try { Start-Process explorer.exe -ArgumentList "/select,`"$path`"" } catch { } })
+  [void]$miFolder.Add_Click(({
+    try { Start-Process explorer.exe -ArgumentList "/select,`"$path`"" } catch { }
+  }).GetNewClosure())
   [void]$cm.Items.Add($miCopy); [void]$cm.Items.Add($miOpen); [void]$cm.Items.Add($miFolder)
 
-  [void]$dock.Add_MouseRightButtonUp({
+  [void]$dock.Add_MouseRightButtonUp(({
     $cm.PlacementTarget = $dock
     $cm.Placement = [System.Windows.Controls.Primitives.PlacementMode]::MousePoint
     $cm.IsOpen = $true
-  })
+  }).GetNewClosure())
 
   return $dock
 }
@@ -418,7 +421,7 @@ function Add-NickRow($nick, $panel) {
     }
   }
 
-  [void]$header.Add_MouseLeftButtonUp({
+  [void]$header.Add_MouseLeftButtonUp(({
     if ($detail.Visibility -eq [System.Windows.Visibility]::Visible) {
       $detail.Visibility = [System.Windows.Visibility]::Collapsed
       $header.Text = ([string][char]0x25B8) + '  ' + $nick
@@ -426,7 +429,7 @@ function Add-NickRow($nick, $panel) {
       $detail.Visibility = [System.Windows.Visibility]::Visible
       $header.Text = ([string][char]0x25BC) + '  ' + $nick
     }
-  })
+  }).GetNewClosure())
 
   [void]$panel.Children.Add($header)
   [void]$panel.Children.Add($detail)
@@ -483,9 +486,14 @@ function Show-Tab($which) {
 function Run-Journal {
   $cmd = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
   try {
-    Start-Process cmd -Verb RunAs -ArgumentList "/k", $cmd
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'cmd.exe'
+    $psi.Arguments = '/k ' + $cmd
+    $psi.UseShellExecute = $false
+    $psi.WorkingDirectory = [Environment]::GetFolderPath('Desktop')
+    [void][System.Diagnostics.Process]::Start($psi)
   } catch {
-    [System.Windows.MessageBox]::Show("Impossibile avviare CMD come amministratore: $($_.Exception.Message)", "Errore", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+    [System.Windows.MessageBox]::Show("Impossibile eseguire il comando Journal: $($_.Exception.Message)", "Errore", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
   }
 }
 
