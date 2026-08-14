@@ -95,7 +95,7 @@ function Invoke-Scan {
     </StackPanel>
     <Grid x:Name="pnlHome" Grid.Row="1" Margin="26,6,26,6">
       <Border Background="#0f172a" CornerRadius="12" BorderBrush="#1e293b" BorderThickness="1">
-        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,0,0,0">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
           <StackPanel Margin="22,18,22,20">
             <TextBlock Text="Select Data Source" Foreground="#e5e7eb" FontSize="15" FontWeight="Bold"/>
             <TextBlock Text="Scansione esclusiva dei 'Setting user:' nei log di Minecraft." Foreground="#8b98ab" FontSize="12" Margin="0,2,0,14"/>
@@ -111,7 +111,6 @@ function Invoke-Scan {
                 </StackPanel>
               </DockPanel>
             </Border>
-            <Button x:Name="btnAnalyze" Content="Analizza dati caricati" Height="42" Margin="0,0,0,14" Style="{StaticResource DarkBtn}" FontSize="13" FontWeight="Bold"/>
             <Border x:Name="Journal" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,10" Cursor="Hand">
               <DockPanel Margin="12">
                 <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="19" Background="#3b2a14">
@@ -124,7 +123,7 @@ function Invoke-Scan {
                 </StackPanel>
               </DockPanel>
             </Border>
-            <Border x:Name="Cestino" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,0" Cursor="Hand">
+            <Border x:Name="Cestino" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,14" Cursor="Hand">
               <DockPanel Margin="12">
                 <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="19" Background="#3a1515">
                   <TextBlock Text="C" Foreground="#f87171" FontSize="15" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -136,6 +135,7 @@ function Invoke-Scan {
                 </StackPanel>
               </DockPanel>
             </Border>
+            <Button x:Name="btnAnalyze" Content="Analizza dati caricati" Height="42" Margin="0,0,0,0" Style="{StaticResource DarkBtn}" FontSize="13" FontWeight="Bold"/>
           </StackPanel>
         </ScrollViewer>
       </Border>
@@ -239,7 +239,6 @@ function Run-Analysis {
 
 function Run-Journal {
   $cmd = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
-  # Avvia CMD come amministratore con il comando gia' pronto
   try {
     Start-Process cmd -Verb RunAs -ArgumentList "/k", $cmd
   } catch {
