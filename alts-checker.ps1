@@ -8,6 +8,8 @@ $script:sources = New-Object System.Collections.Generic.List[string]
 $script:nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
 $script:journalLines = New-Object System.Collections.Generic.List[string]
 $script:journalError = $null
+$script:nickControls = @{}
+$script:currentTab = 'acc'
 $script:scanJob = $null
 $script:scanTimer = $null
 $script:journalJob = $null
@@ -61,7 +63,7 @@ try {
     }
   }
 
-  # 2) CACHE / LAUNCHER (come il checker di shawnfroste)
+  # 2) CACHE / LAUNCHER
   $jsonFiles = @(
     @{ path = (Join-Path $mc 'usernamecache.json');      patterns = @('"[^"]+"\s*:\s*"([^"]+)"') },
     @{ path = (Join-Path $mc 'usercache.json');          patterns = @('"name"\s*:\s*"([^"]+)"') },
@@ -257,11 +259,18 @@ try {
               <TextBlock Text="[Log + Cache + Launcher]" Foreground="#4ade80" FontSize="13" FontWeight="Bold" Margin="6,0,0,0"/>
             </StackPanel>
           </DockPanel>
-          <StackPanel Orientation="Horizontal" Margin="12,0,12,12">
+          <StackPanel Orientation="Horizontal" Margin="12,0,12,6">
             <Button x:Name="btnTabAcc" Content="Accounts Found" Width="140" Height="30" Style="{StaticResource DarkBtn}" FontWeight="Bold" FontSize="12"/>
             <Button x:Name="btnTabFor" Content="Forensics" Width="100" Height="30" Margin="6,0,0,0" Style="{StaticResource DarkBtn}" FontWeight="Bold" FontSize="12"/>
             <Button x:Name="btnTabJou" Content="Journal" Width="90" Height="30" Margin="6,0,0,0" Style="{StaticResource DarkBtn}" FontWeight="Bold" FontSize="12"/>
+            <Border x:Name="boxSearch" Width="150" Height="30" Margin="10,0,0,0" Background="#16233a" BorderBrush="#1e293b" BorderThickness="1" CornerRadius="8">
+              <Grid>
+                <TextBlock x:Name="txtSearchPh" Text="Cerca nome" Foreground="#64748b" FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0" IsHitTestVisible="False"/>
+                <TextBox x:Name="txtSearch" Background="Transparent" BorderThickness="0" Foreground="#e5e7eb" FontSize="12" VerticalAlignment="Center" Margin="6,0,4,0" CaretBrush="#e5e7eb"/>
+              </Grid>
+            </Border>
           </StackPanel>
+          <TextBlock x:Name="txtSearchWarn" Text="Nessun account trovato!" Foreground="#f87171" FontSize="10" Margin="12,0,12,10" Visibility="Collapsed"/>
         </StackPanel>
       </Border>
       <Border Grid.Row="1" Background="#0f172a" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,8,0,0">
@@ -330,6 +339,38 @@ function Apply-ScanResults($data) {
       $script:nickPaths[$k] = $lst
     }
   }
+}
+
+function Reset-NickHighlight {
+  foreach ($k in @($script:nickControls.Keys)) {
+    $c = $script:nickControls[$k]
+    if ($c -and $c.header) { $c.header.Background = [System.Windows.Media.Brushes]::Transparent }
+  }
+}
+
+function Search-Account($term) {
+  $t = $term.Trim()
+  if (-not $t) { return $null }
+  if ($script:currentTab -ne 'acc') { Show-Tab 'acc' }
+  $key = $t.ToLower()
+  $found = $null
+  if ($script:nickControls.ContainsKey($key)) { $found = $key }
+  if (-not $found) {
+    foreach ($k in @($script:nickControls.Keys)) { if ($k.StartsWith($key)) { $found = $k; break } }
+  }
+  if (-not $found) {
+    foreach ($k in @($script:nickControls.Keys)) { if ($k.Contains($key)) { $found = $k; break } }
+  }
+  if (-not $found) { return $null }
+  Reset-NickHighlight
+  $c = $script:nickControls[$found]
+  if ($c) {
+    $c.header.Background = Brush '#14532d'
+    $c.detail.Visibility = [System.Windows.Visibility]::Visible
+    $c.header.Text = ([string][char]0x25BC) + '  ' + $c.nick
+    try { $c.header.BringIntoView() } catch { }
+  }
+  return $found
 }
 
 function Start-MinecraftScan {
@@ -477,6 +518,21 @@ function Open-Cestino {
   }
 }
 
+function Parse-JournalName($l) {
+  $m = [regex]::Match($l, '"([^"]*(?:latest\.log|\.log\.gz|launcher_profiles\.json|usernamecache\.json|usercache\.json|shig\.inima|launcher_accounts\.json)[^"]*)"')
+  if ($m.Success) { return $m.Groups[1].Value }
+  $m2 = [regex]::Match($l, '([A-Za-z0-9_.\-]*(?:latest\.log|\.log\.gz|launcher_profiles\.json|usernamecache\.json|usercache\.json|shig\.inima|launcher_accounts\.json))')
+  if ($m2.Success) { return $m2.Groups[1].Value }
+  return $l.Trim()
+}
+
+function Parse-JournalCode($l) {
+  $ms = [regex]::Matches($l, '[0-9a-fA-F]{16,}')
+  if ($ms.Count -ge 2) { return $ms[1].Value }
+  if ($ms.Count -eq 1) { return $ms[0].Value }
+  return $null
+}
+
 function New-LogRow($path) {
   $dock = New-Object System.Windows.Controls.DockPanel
   $dock.Margin = '30,3,8,3'
@@ -586,11 +642,14 @@ function Add-NickRow($nick, $panel) {
     }
   }).GetNewClosure())
 
+  $script:nickControls[$key] = @{ header = $header; detail = $detail; nick = $nick }
+
   [void]$panel.Children.Add($header)
   [void]$panel.Children.Add($detail)
 }
 
 function Show-Tab($which) {
+  $script:currentTab = $which
   $accent = Brush '#38bdf8'; $darktxt = Brush '#04121f'; $btnbg = Brush '#16233a'
   $sub = Brush '#8b98ab'; $txt = Brush '#e5e7eb'
   $acc = C 'btnTabAcc'; $for = C 'btnTabFor'; $jou = C 'btnTabJou'
@@ -603,6 +662,7 @@ function Show-Tab($which) {
   $panel.Children.Clear()
 
   if ($which -eq 'acc') {
+    $script:nickControls = @{}
     $h = New-Object System.Windows.Controls.TextBlock
     $h.Text = ([string][char]0x25BC) + '   Accounts trovati:   (' + $script:accounts.Count + ')'
     $h.Foreground = $txt; $h.FontSize = 13; $h.FontWeight = [System.Windows.FontWeights]::Bold
@@ -638,12 +698,12 @@ function Show-Tab($which) {
   }
   else {
     $h = New-Object System.Windows.Controls.TextBlock
-    $h.Text = ([string][char]0x25BC) + '   File di Minecraft eliminati (USN Journal):   (' + $script:journalLines.Count + ')'
+    $h.Text = ([string][char]0x25BC) + '   JOURNAL (file eliminati):   (' + $script:journalLines.Count + ')'
     $h.Foreground = $txt; $h.FontSize = 13; $h.FontWeight = [System.Windows.FontWeights]::Bold
     $h.Margin = '4,6,4,2'
     $panel.Children.Add($h) | Out-Null
     $hint = New-Object System.Windows.Controls.TextBlock
-    $hint.Text = 'Voci con motivo 0x80000200 (eliminazione) nel USN Journal di C:.'
+    $hint.Text = 'Click sul file: apri la tendina e copia il 2° codice di memoria.'
     $hint.Foreground = Brush '#64748b'; $hint.FontSize = 10; $hint.Margin = '6,0,4,6'
     $panel.Children.Add($hint) | Out-Null
     if ($script:journalLines.Count -eq 0) {
@@ -658,20 +718,65 @@ function Show-Tab($which) {
       $panel.Children.Add($e) | Out-Null
     }
     foreach ($l in $script:journalLines) {
-      $name = $l
-      $idx = $l.LastIndexOf(',')
-      if ($idx -ge 0 -and $idx -lt ($l.Length - 1)) { $name = $l.Substring($idx + 1) }
-      $sp = New-Object System.Windows.Controls.StackPanel
-      $sp.Margin = '10,2,8,2'
-      $t1 = New-Object System.Windows.Controls.TextBlock
-      $t1.Text = ([string][char]0x2716) + '  ' + $name
-      $t1.Foreground = Brush '#f87171'; $t1.FontSize = 12
-      $t2 = New-Object System.Windows.Controls.TextBlock
-      $t2.Text = $l
-      $t2.Foreground = Brush '#475569'; $t2.FontSize = 9
-      $t2.TextWrapping = [System.Windows.TextWrapping]::Wrap
-      [void]$sp.Children.Add($t1); [void]$sp.Children.Add($t2)
-      $panel.Children.Add($sp) | Out-Null
+      $name = Parse-JournalName $l
+      $code = Parse-JournalCode $l
+
+      $header = New-Object System.Windows.Controls.TextBlock
+      $header.Text = ([string][char]0x25B8) + '  ' + $name
+      $header.Foreground = Brush '#f87171'; $header.FontSize = 12; $header.Margin = '10,2,8,2'
+      $header.Cursor = [System.Windows.Input.Cursors]::Hand
+
+      $detail = New-Object System.Windows.Controls.StackPanel
+      $detail.Margin = '26,0,8,6'
+      $detail.Visibility = [System.Windows.Visibility]::Collapsed
+
+      if ($code) {
+        $ct = New-Object System.Windows.Controls.TextBlock
+        $ct.Text = '2° codice memoria:  ' + $code
+        $ct.Foreground = Brush '#8b98ab'; $ct.FontSize = 11; $ct.Margin = '0,2,0,4'
+        [void]$detail.Children.Add($ct)
+
+        $btnCode = New-Object System.Windows.Controls.Button
+        $btnCode.Content = 'Copia codice'
+        $btnCode.Width = 110; $btnCode.Height = 26; $btnCode.FontSize = 10
+        $btnCode.Style = $window.FindResource('DarkBtn')
+        $btnCode.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Left
+        [void]$btnCode.Add_Click(({
+          try { [System.Windows.Clipboard]::SetText($code) } catch { }
+        }).GetNewClosure())
+        [void]$detail.Children.Add($btnCode)
+      }
+
+      $btnLine = New-Object System.Windows.Controls.Button
+      $btnLine.Content = 'Copia riga completa'
+      $btnLine.Width = 130; $btnLine.Height = 26; $btnLine.FontSize = 10
+      $btnLine.Style = $window.FindResource('DarkBtn')
+      $btnLine.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Left
+      $btnLine.Margin = '0,4,0,4'
+      [void]$btnLine.Add_Click(({
+        try { [System.Windows.Clipboard]::SetText($l) } catch { }
+      }).GetNewClosure())
+      [void]$detail.Children.Add($btnLine)
+
+      $raw = New-Object System.Windows.Controls.TextBlock
+      $raw.Text = $l
+      $raw.Foreground = Brush '#475569'; $raw.FontSize = 9
+      $raw.TextWrapping = [System.Windows.TextWrapping]::Wrap
+      $raw.Margin = '0,2,0,2'
+      [void]$detail.Children.Add($raw)
+
+      [void]$header.Add_MouseLeftButtonUp(({
+        if ($detail.Visibility -eq [System.Windows.Visibility]::Visible) {
+          $detail.Visibility = [System.Windows.Visibility]::Collapsed
+          $header.Text = ([string][char]0x25B8) + '  ' + $name
+        } else {
+          $detail.Visibility = [System.Windows.Visibility]::Visible
+          $header.Text = ([string][char]0x25BC) + '  ' + $name
+        }
+      }).GetNewClosure())
+
+      $panel.Children.Add($header) | Out-Null
+      $panel.Children.Add($detail) | Out-Null
     }
   }
 }
@@ -683,7 +788,7 @@ function Show-Info {
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize" FontFamily="Segoe UI">
   <StackPanel Margin="20">
     <TextBlock Text="CoralMC Alts Checker" Foreground="#38bdf8" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,10,0,8"/>
-    <TextBlock Foreground="#8b98ab" FontSize="12" TextWrapping="Wrap" Text="Come il checker di shawnfroste: log 'Setting user:' (anche .gz), usernamecache, usercache, launcher_profiles/accounts, shig.inima e file eliminati via USN Journal. Con la grafica CoralMC."/>
+    <TextBlock Foreground="#8b98ab" FontSize="12" TextWrapping="Wrap" Text="Log 'Setting user:' (anche .gz), usernamecache, usercache, launcher_profiles/accounts, shig.inima e file eliminati via USN Journal. Con la grafica CoralMC."/>
     <TextBlock Text="Made by CallMeDen_" Foreground="#8b98ab" FontSize="11" HorizontalAlignment="Center" Margin="0,18,0,0"/>
   </StackPanel>
 </Window>
@@ -692,6 +797,39 @@ function Show-Info {
   $w.Owner = $window
   $w.ShowDialog() | Out-Null
 }
+
+# --- Ricerca "Cerca nome" ---
+(C 'txtSearch').Add_TextChanged({
+  param($s, $e)
+  $ph = C 'txtSearchPh'; $box = C 'boxSearch'; $warn = C 'txtSearchWarn'
+  $term = $s.Text
+  if (-not $term -or -not $term.Trim()) {
+    $ph.Visibility = [System.Windows.Visibility]::Visible
+    $box.BorderBrush = Brush '#1e293b'
+    $warn.Visibility = [System.Windows.Visibility]::Collapsed
+    Reset-NickHighlight
+    return
+  }
+  $ph.Visibility = [System.Windows.Visibility]::Collapsed
+  $f = Search-Account $term
+  if ($f) {
+    $box.BorderBrush = Brush '#4ade80'
+    $warn.Visibility = [System.Windows.Visibility]::Collapsed
+  } else {
+    $box.BorderBrush = Brush '#f87171'
+    $warn.Visibility = [System.Windows.Visibility]::Visible
+  }
+})
+(C 'txtSearch').Add_KeyDown({
+  param($s, $e)
+  if ($e.Key -eq [System.Windows.Input.Key]::Enter) {
+    $term = $s.Text
+    if ($term -and $term.Trim() -and -not (Search-Account $term)) {
+      [System.Windows.MessageBox]::Show('Nessun account trovato!', 'Cerca nome', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning) | Out-Null
+    }
+    $e.Handled = $true
+  }
+})
 
 (C 'btnInfo').Add_Click({ Show-Info })
 (C 'rowLogs').Add_MouseLeftButtonUp({ Start-MinecraftScan })
