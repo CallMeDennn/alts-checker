@@ -801,7 +801,7 @@ function Show-Tab($which) {
     $h.Margin = '4,6,4,2'
     $panel.Children.Add($h) | Out-Null
     $hint = New-Object System.Windows.Controls.TextBlock
-    $hint.Text = 'Click sul file: apri la tendina e copia il 2° codice di memoria.'
+    $hint.Text = 'Click destro su un elemento per copiare il codice o la stringa completa.'
     $hint.Foreground = Brush '#64748b'; $hint.FontSize = 10; $hint.Margin = '6,0,4,6'
     $panel.Children.Add($hint) | Out-Null
     if ($script:journalLines.Count -eq 0) {
@@ -818,63 +818,72 @@ function Show-Tab($which) {
     foreach ($l in $script:journalLines) {
       $name = Parse-JournalName $l
       $code = Parse-JournalCode $l
+      $localCode = $code
+      $localLine = $l
 
-      $header = New-Object System.Windows.Controls.TextBlock
-      $header.Text = ([string][char]0x25B8) + '  ' + $name
-      $header.Foreground = Brush '#f87171'; $header.FontSize = 12; $header.Margin = '10,2,8,2'
-      $header.Cursor = [System.Windows.Input.Cursors]::Hand
-
-      $detail = New-Object System.Windows.Controls.StackPanel
-      $detail.Margin = '26,0,8,6'
-      $detail.Visibility = [System.Windows.Visibility]::Collapsed
-
-      if ($code) {
-        $ct = New-Object System.Windows.Controls.TextBlock
-        $ct.Text = '2° codice memoria:  ' + $code
-        $ct.Foreground = Brush '#8b98ab'; $ct.FontSize = 11; $ct.Margin = '0,2,0,4'
-        [void]$detail.Children.Add($ct)
-
-        $btnCode = New-Object System.Windows.Controls.Button
-        $btnCode.Content = 'Copia codice'
-        $btnCode.Width = 110; $btnCode.Height = 26; $btnCode.FontSize = 10
-        $btnCode.Style = $window.FindResource('DarkBtn')
-        $btnCode.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Left
-        [void]$btnCode.Add_Click(({
-          try { [System.Windows.Clipboard]::SetText($code) } catch { }
-        }).GetNewClosure())
-        [void]$detail.Children.Add($btnCode)
+      $rowBorder = New-Object System.Windows.Controls.Border
+      $rowBorder.Background = Brush '#131f33'
+      $rowBorder.BorderBrush = Brush '#1e293b'
+      $rowBorder.BorderThickness = '1'
+      $rowBorder.CornerRadius = '8'
+      $rowBorder.Margin = '10,4,8,4'
+      $rowBorder.Padding = '10,8,10,8'
+      
+      $contentStack = New-Object System.Windows.Controls.StackPanel
+      
+      $nameText = New-Object System.Windows.Controls.TextBlock
+      $nameText.Text = $name
+      $nameText.Foreground = Brush '#f87171'
+      $nameText.FontSize = 12
+      $nameText.FontWeight = [System.Windows.FontWeights]::Bold
+      $nameText.TextWrapping = [System.Windows.TextWrapping]::Wrap
+      [void]$contentStack.Children.Add($nameText)
+      
+      if ($localCode) {
+        $codeText = New-Object System.Windows.Controls.TextBlock
+        $codeText.Text = "2° Codice Memoria: $localCode"
+        $codeText.Foreground = Brush '#38bdf8'
+        $codeText.FontSize = 11
+        $codeText.FontWeight = [System.Windows.FontWeights]::SemiBold
+        $codeText.Margin = '0,6,0,0'
+        [void]$contentStack.Children.Add($codeText)
       }
-
-      $btnLine = New-Object System.Windows.Controls.Button
-      $btnLine.Content = 'Copia riga completa'
-      $btnLine.Width = 130; $btnLine.Height = 26; $btnLine.FontSize = 10
-      $btnLine.Style = $window.FindResource('DarkBtn')
-      $btnLine.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Left
-      $btnLine.Margin = '0,4,0,4'
-      [void]$btnLine.Add_Click(({
-        try { [System.Windows.Clipboard]::SetText($l) } catch { }
+      
+      $rawText = New-Object System.Windows.Controls.TextBlock
+      $rawText.Text = $localLine
+      $rawText.Foreground = Brush '#8b98ab'
+      $rawText.FontSize = 10
+      $rawText.TextWrapping = [System.Windows.TextWrapping]::Wrap
+      $rawText.Margin = '0,6,0,0'
+      [void]$contentStack.Children.Add($rawText)
+      
+      $rowBorder.Child = $contentStack
+      
+      $cm = New-Object System.Windows.Controls.ContextMenu
+      $cm.Background = Brush '#0f172a'
+      $cm.BorderBrush = Brush '#1e293b'
+      
+      if ($localCode) {
+        $miCopyCode = New-Object System.Windows.Controls.MenuItem
+        $miCopyCode.Header = 'Copia 2° codice memoria'
+        $miCopyCode.Foreground = Brush '#e5e7eb'
+        [void]$miCopyCode.Add_Click(({
+          try { [System.Windows.Clipboard]::SetText($localCode) } catch {}
+        }).GetNewClosure())
+        [void]$cm.Items.Add($miCopyCode)
+      }
+      
+      $miCopyLine = New-Object System.Windows.Controls.MenuItem
+      $miCopyLine.Header = 'Copia stringa completa'
+      $miCopyLine.Foreground = Brush '#e5e7eb'
+      [void]$miCopyLine.Add_Click(({
+        try { [System.Windows.Clipboard]::SetText($localLine) } catch {}
       }).GetNewClosure())
-      [void]$detail.Children.Add($btnLine)
-
-      $raw = New-Object System.Windows.Controls.TextBlock
-      $raw.Text = $l
-      $raw.Foreground = Brush '#475569'; $raw.FontSize = 9
-      $raw.TextWrapping = [System.Windows.TextWrapping]::Wrap
-      $raw.Margin = '0,2,0,2'
-      [void]$detail.Children.Add($raw)
-
-      [void]$header.Add_MouseLeftButtonUp(({
-        if ($detail.Visibility -eq [System.Windows.Visibility]::Visible) {
-          $detail.Visibility = [System.Windows.Visibility]::Collapsed
-          $header.Text = ([string][char]0x25B8) + '  ' + $name
-        } else {
-          $detail.Visibility = [System.Windows.Visibility]::Visible
-          $header.Text = ([string][char]0x25BC) + '  ' + $name
-        }
-      }).GetNewClosure())
-
-      $panel.Children.Add($header) | Out-Null
-      $panel.Children.Add($detail) | Out-Null
+      [void]$cm.Items.Add($miCopyLine)
+      
+      $rowBorder.ContextMenu = $cm
+      
+      $panel.Children.Add($rowBorder) | Out-Null
     }
   }
 }
