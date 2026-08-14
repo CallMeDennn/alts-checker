@@ -5,6 +5,7 @@ Add-Type -AssemblyName WindowsBase
 $script:accounts = New-Object System.Collections.Generic.List[string]
 $script:seen = New-Object System.Collections.Generic.HashSet[string]
 $script:sources = New-Object System.Collections.Generic.List[string]
+$script:nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
 
 function Brush($hex) { return (New-Object System.Windows.Media.BrushConverter).ConvertFromString($hex) }
 
@@ -27,6 +28,7 @@ function Invoke-Scan {
   $script:accounts = New-Object System.Collections.Generic.List[string]
   $script:seen = New-Object System.Collections.Generic.HashSet[string]
   $script:sources = New-Object System.Collections.Generic.List[string]
+  $script:nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
   $mc = Join-Path $env:APPDATA '.minecraft'
   $logsDir = Join-Path $mc 'logs'
 
@@ -39,8 +41,17 @@ function Invoke-Scan {
         $ms = [regex]::Matches($text, '(?m)Setting user:\s*(\S+)')
         foreach ($m in $ms) {
           $nick = $m.Groups[1].Value.Trim()
-          if ($nick -and $script:seen.Add($nick.ToLower())) {
+          $key = $nick.ToLower()
+          if ($nick -and $script:seen.Add($key)) {
             $script:accounts.Add($nick) | Out-Null
+          }
+          if ($nick) {
+            if (-not $script:nickPaths.ContainsKey($key)) {
+              $script:nickPaths[$key] = New-Object 'System.Collections.Generic.List[string]'
+            }
+            if (-not $script:nickPaths[$key].Contains($f.FullName)) {
+              $script:nickPaths[$key].Add($f.FullName) | Out-Null
+            }
           }
         }
       }
@@ -111,31 +122,31 @@ function Invoke-Scan {
                 </StackPanel>
               </DockPanel>
             </Border>
-            <Border x:Name="Journal" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,10" Cursor="Hand">
+            <Border x:Name="rowJournal" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,10" Cursor="Hand">
               <DockPanel Margin="12">
                 <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="19" Background="#3b2a14">
                   <TextBlock Text="J" Foreground="#fbbf24" FontSize="15" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
                 <TextBlock x:Name="arrJ" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                  <TextBlock Text="USN JOURNAL" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
-                  <TextBlock Text="Lettura journal (richiede Admin) + export in logs.txt" Foreground="#8b98ab" FontSize="11"/>
+                  <TextBlock Text="Journal" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
+                  <TextBlock Text="Apre CMD (Admin) con lettura USN journal + export logs.txt" Foreground="#8b98ab" FontSize="11"/>
                 </StackPanel>
               </DockPanel>
             </Border>
-            <Border x:Name="Cestino" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,14" Cursor="Hand">
+            <Border x:Name="rowCestino" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,14" Cursor="Hand">
               <DockPanel Margin="12">
                 <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="19" Background="#3a1515">
                   <TextBlock Text="C" Foreground="#f87171" FontSize="15" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
                 <TextBlock x:Name="arrC" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                  <TextBlock Text="CESTINO" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
+                  <TextBlock Text="Cestino" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
                   <TextBlock Text="Apri la cartella C:\$Recycle.Bin" Foreground="#8b98ab" FontSize="11"/>
                 </StackPanel>
               </DockPanel>
             </Border>
-            <Button x:Name="btnAnalyze" Content="Analizza dati caricati" Height="42" Margin="0,0,0,0" Style="{StaticResource DarkBtn}" FontSize="13" FontWeight="Bold"/>
+            <Button x:Name="btnAnalyze" Content="Analizza dati caricati" Height="42" Style="{StaticResource DarkBtn}" FontSize="13" FontWeight="Bold"/>
           </StackPanel>
         </ScrollViewer>
       </Border>
@@ -183,6 +194,81 @@ function Show-Home {
   (C 'pnlHome').Visibility = [System.Windows.Visibility]::Visible
 }
 
+function New-PathRow($path) {
+  $dock = New-Object System.Windows.Controls.DockPanel
+  $dock.Margin = '0,2,0,2'
+
+  $btnOpen = New-Object System.Windows.Controls.Button
+  $btnOpen.Content = 'Apri'
+  $btnOpen.Width = 46; $btnOpen.Height = 22; $btnOpen.FontSize = 10
+  $btnOpen.Style = $window.FindResource('DarkBtn')
+  $btnOpen.Margin = '4,0,0,0'
+  [void]$btnOpen.Add_Click({
+    try { Start-Process -LiteralPath $path }
+    catch {
+      try { Start-Process explorer.exe -ArgumentList "/select,`"$path`"" } catch { }
+    }
+  })
+  [System.Windows.Controls.DockPanel]::SetDock($btnOpen, [System.Windows.Controls.Dock]::Right)
+  [void]$dock.Children.Add($btnOpen)
+
+  $btnCopy = New-Object System.Windows.Controls.Button
+  $btnCopy.Content = 'Copia'
+  $btnCopy.Width = 52; $btnCopy.Height = 22; $btnCopy.FontSize = 10
+  $btnCopy.Style = $window.FindResource('DarkBtn')
+  [System.Windows.Controls.DockPanel]::SetDock($btnCopy, [System.Windows.Controls.Dock]::Right)
+  [void]$btnCopy.Add_Click({
+    try { [System.Windows.Clipboard]::SetText($path) } catch { }
+  })
+  [void]$dock.Children.Add($btnCopy)
+
+  $tb = New-Object System.Windows.Controls.TextBox
+  $tb.Text = $path
+  $tb.IsReadOnly = $true
+  $tb.Background = [System.Windows.Media.Brushes]::Transparent
+  $tb.BorderThickness = New-Object System.Windows.Thickness(0)
+  $tb.Foreground = Brush '#8b98ab'
+  $tb.FontSize = 11
+  $tb.TextWrapping = [System.Windows.TextWrapping]::Wrap
+  $tb.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $tb.Margin = '6,0,0,0'
+  [void]$dock.Children.Add($tb)
+
+  return $dock
+}
+
+function Add-NickRow($nick, $panel) {
+  $green = Brush '#4ade80'
+  $key = $nick.ToLower()
+  $paths = @()
+  if ($script:nickPaths -and $script:nickPaths.ContainsKey($key)) { $paths = $script:nickPaths[$key] }
+
+  $header = New-Object System.Windows.Controls.TextBlock
+  $header.Text = ([string][char]0x25B8) + '  ' + $nick
+  $header.Foreground = $green; $header.FontSize = 12; $header.Margin = '18,2,8,2'
+  $header.Cursor = [System.Windows.Input.Cursors]::Hand
+
+  $detail = New-Object System.Windows.Controls.StackPanel
+  $detail.Margin = '30,0,8,4'
+  $detail.Visibility = [System.Windows.Visibility]::Collapsed
+  foreach ($p in $paths) {
+    [void]$detail.Children.Add((New-PathRow $p))
+  }
+
+  [void]$header.Add_MouseLeftButtonUp({
+    if ($detail.Visibility -eq [System.Windows.Visibility]::Visible) {
+      $detail.Visibility = [System.Windows.Visibility]::Collapsed
+      $header.Text = ([string][char]0x25B8) + '  ' + $nick
+    } else {
+      $detail.Visibility = [System.Windows.Visibility]::Visible
+      $header.Text = ([string][char]0x25BC) + '  ' + $nick
+    }
+  })
+
+  [void]$panel.Children.Add($header)
+  [void]$panel.Children.Add($detail)
+}
+
 function Show-Tab($which) {
   $accent = Brush '#38bdf8'; $darktxt = Brush '#04121f'; $btnbg = Brush '#16233a'
   $sub = Brush '#8b98ab'; $green = Brush '#4ade80'; $txt = Brush '#e5e7eb'
@@ -209,10 +295,7 @@ function Show-Tab($which) {
       $panel.Children.Add($e) | Out-Null
     }
     foreach ($nick in $script:accounts) {
-      $row = New-Object System.Windows.Controls.TextBlock
-      $row.Text = ([string][char]0x25B8) + '  ' + $nick
-      $row.Foreground = $green; $row.FontSize = 12; $row.Margin = '18,2,8,2'
-      $panel.Children.Add($row) | Out-Null
+      Add-NickRow $nick $panel
     }
   } else {
     if ($script:sources.Count -eq 0) {
@@ -274,8 +357,8 @@ function Show-Info {
 (C 'btnInfo').Add_Click({ Show-Info })
 (C 'rowLogs').Add_MouseLeftButtonUp({ Run-Analysis })
 (C 'btnAnalyze').Add_Click({ Run-Analysis })
-(C 'Journal').Add_MouseLeftButtonUp({ Run-Journal })
-(C 'Cestino').Add_MouseLeftButtonUp({ Open-Cestino })
+(C 'rowJournal').Add_MouseLeftButtonUp({ Run-Journal })
+(C 'rowCestino').Add_MouseLeftButtonUp({ Open-Cestino })
 (C 'btnBack').Add_Click({ Show-Home })
 (C 'btnTabAcc').Add_Click({ Show-Tab 'acc' })
 (C 'btnTabFor').Add_Click({ Show-Tab 'for' })
