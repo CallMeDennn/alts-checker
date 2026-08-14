@@ -195,46 +195,48 @@ function Show-Home {
 }
 
 function New-PathRow($path) {
-  $dock = New-Object System.Windows.Controls.DockPanel
-  $dock.Margin = '0,2,0,2'
-
-  $btnOpen = New-Object System.Windows.Controls.Button
-  $btnOpen.Content = 'Apri'
-  $btnOpen.Width = 46; $btnOpen.Height = 22; $btnOpen.FontSize = 10
-  $btnOpen.Style = $window.FindResource('DarkBtn')
-  $btnOpen.Margin = '4,0,0,0'
-  [void]$btnOpen.Add_Click({
-    try { Start-Process -LiteralPath $path }
-    catch {
-      try { Start-Process explorer.exe -ArgumentList "/select,`"$path`"" } catch { }
-    }
-  })
-  [System.Windows.Controls.DockPanel]::SetDock($btnOpen, [System.Windows.Controls.Dock]::Right)
-  [void]$dock.Children.Add($btnOpen)
-
-  $btnCopy = New-Object System.Windows.Controls.Button
-  $btnCopy.Content = 'Copia'
-  $btnCopy.Width = 52; $btnCopy.Height = 22; $btnCopy.FontSize = 10
-  $btnCopy.Style = $window.FindResource('DarkBtn')
-  [System.Windows.Controls.DockPanel]::SetDock($btnCopy, [System.Windows.Controls.Dock]::Right)
-  [void]$btnCopy.Add_Click({
-    try { [System.Windows.Clipboard]::SetText($path) } catch { }
-  })
-  [void]$dock.Children.Add($btnCopy)
-
-  $tb = New-Object System.Windows.Controls.TextBox
-  $tb.Text = $path
-  $tb.IsReadOnly = $true
-  $tb.Background = [System.Windows.Media.Brushes]::Transparent
-  $tb.BorderThickness = New-Object System.Windows.Thickness(0)
+  $tb = New-Object System.Windows.Controls.TextBlock
+  $tb.Text = ([string][char]0x2022) + '  ' + $path
   $tb.Foreground = Brush '#8b98ab'
   $tb.FontSize = 11
+  $tb.Margin = '34,3,8,3'
   $tb.TextWrapping = [System.Windows.TextWrapping]::Wrap
-  $tb.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
-  $tb.Margin = '6,0,0,0'
-  [void]$dock.Children.Add($tb)
+  $tb.Cursor = [System.Windows.Input.Cursors]::Hand
 
-  return $dock
+  $cm = New-Object System.Windows.Controls.ContextMenu
+  $cm.Background = Brush '#0f172a'
+  $cm.BorderBrush = Brush '#1e293b'
+
+  $miCopy = New-Object System.Windows.Controls.MenuItem
+  $miCopy.Header = 'Copia percorso'
+  $miCopy.Foreground = Brush '#e5e7eb'
+  [void]$miCopy.Add_Click({
+    try { [System.Windows.Clipboard]::SetText($path) } catch { }
+  })
+
+  $miOpen = New-Object System.Windows.Controls.MenuItem
+  $miOpen.Header = 'Apri file'
+  $miOpen.Foreground = Brush '#e5e7eb'
+  [void]$miOpen.Add_Click({
+    try { Start-Process -LiteralPath $path }
+    catch {
+      try { Start-Process notepad.exe -ArgumentList "`"$path`"" } catch { }
+    }
+  })
+
+  $miFolder = New-Object System.Windows.Controls.MenuItem
+  $miFolder.Header = 'Apri cartella'
+  $miFolder.Foreground = Brush '#e5e7eb'
+  [void]$miFolder.Add_Click({
+    try { Start-Process explorer.exe -ArgumentList "/select,`"$path`"" } catch { }
+  })
+
+  [void]$cm.Items.Add($miCopy)
+  [void]$cm.Items.Add($miOpen)
+  [void]$cm.Items.Add($miFolder)
+  $tb.ContextMenu = $cm
+
+  return $tb
 }
 
 function Add-NickRow($nick, $panel) {
@@ -249,7 +251,7 @@ function Add-NickRow($nick, $panel) {
   $header.Cursor = [System.Windows.Input.Cursors]::Hand
 
   $detail = New-Object System.Windows.Controls.StackPanel
-  $detail.Margin = '30,0,8,4'
+  $detail.Margin = '12,0,8,4'
   $detail.Visibility = [System.Windows.Visibility]::Collapsed
   foreach ($p in $paths) {
     [void]$detail.Children.Add((New-PathRow $p))
@@ -286,8 +288,12 @@ function Show-Tab($which) {
     $h = New-Object System.Windows.Controls.TextBlock
     $h.Text = ([string][char]0x25BC) + '   Setting user:   (' + $script:accounts.Count + ')'
     $h.Foreground = $txt; $h.FontSize = 13; $h.FontWeight = [System.Windows.FontWeights]::Bold
-    $h.Margin = '4,6,4,6'
+    $h.Margin = '4,6,4,2'
     $panel.Children.Add($h) | Out-Null
+    $hint = New-Object System.Windows.Controls.TextBlock
+    $hint.Text = 'Click sinistro sul nick: espandi/comprimi  |  Click destro sul log: copia/apri'
+    $hint.Foreground = Brush '#64748b'; $hint.FontSize = 10; $hint.Margin = '6,0,4,6'
+    $panel.Children.Add($hint) | Out-Null
     if ($script:accounts.Count -eq 0) {
       $e = New-Object System.Windows.Controls.TextBlock
       $e.Text = 'Nessun Setting user trovato nei log.'
