@@ -6,11 +6,12 @@ $script:accounts = New-Object System.Collections.Generic.List[string]
 $script:seen = New-Object System.Collections.Generic.HashSet[string]
 $script:sources = New-Object System.Collections.Generic.List[string]
 $script:nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
+$script:journalLines = New-Object System.Collections.Generic.List[string]
+$script:journalError = $null
 $script:scanJob = $null
 $script:scanTimer = $null
-$script:jPS = $null
-$script:jAsync = $null
-$script:jTimer = $null
+$script:journalJob = $null
+$script:journalTimer = $null
 
 function Brush($hex) { return (New-Object System.Windows.Media.BrushConverter).ConvertFromString($hex) }
 
@@ -27,11 +28,26 @@ try {
       return $t
     } catch { return $null }
   }
+  function Valid-Nick($s) {
+    if (-not $s) { return $false }
+    return ($s -match '^[A-Za-z0-9_]{3,16}$')
+  }
   $accounts = New-Object System.Collections.Generic.List[string]
   $seen = New-Object System.Collections.Generic.HashSet[string]
   $sources = New-Object System.Collections.Generic.List[string]
   $nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
+  function Add-Nick($nick, $path) {
+    if (-not (Valid-Nick $nick)) { return }
+    $key = $nick.ToLower()
+    if ($seen.Add($key)) { $accounts.Add($nick) | Out-Null }
+    if ($path) {
+      if (-not $nickPaths.ContainsKey($key)) { $nickPaths[$key] = New-Object 'System.Collections.Generic.List[string]' }
+      if (-not $nickPaths[$key].Contains($path)) { $nickPaths[$key].Add($path) | Out-Null }
+    }
+  }
   $mc = Join-Path $env:APPDATA '.minecraft'
+
+  # 1) LOGS (Setting user:, anche .gz)
   $logsDir = Join-Path $mc 'logs'
   if (Test-Path -LiteralPath $logsDir) {
     $files = @(Get-ChildItem -LiteralPath $logsDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.log$' -or $_.Name -match '\.log\.gz$' })
@@ -40,23 +56,81 @@ try {
       $text = if ($f.Name.EndsWith('.gz')) { Read-GzFile $f.FullName } else { Read-TextFile $f.FullName }
       if ($text) {
         $ms = [regex]::Matches($text, '(?m)Setting user:\s*(\S+)')
-        foreach ($m in $ms) {
-          $nick = $m.Groups[1].Value.Trim()
-          $key = $nick.ToLower()
-          if ($nick -and $seen.Add($key)) { $accounts.Add($nick) | Out-Null }
-          if ($nick) {
-            if (-not $nickPaths.ContainsKey($key)) { $nickPaths[$key] = New-Object 'System.Collections.Generic.List[string]' }
-            if (-not $nickPaths[$key].Contains($f.FullName)) { $nickPaths[$key].Add($f.FullName) | Out-Null }
-          }
+        foreach ($m in $ms) { Add-Nick $m.Groups[1].Value.Trim() $f.FullName }
+      }
+    }
+  }
+
+  # 2) CACHE / LAUNCHER (come il checker di shawnfroste)
+  $jsonFiles = @(
+    @{ path = (Join-Path $mc 'usernamecache.json');      patterns = @('"[^"]+"\s*:\s*"([^"]+)"') },
+    @{ path = (Join-Path $mc 'usercache.json');          patterns = @('"name"\s*:\s*"([^"]+)"') },
+    @{ path = (Join-Path $mc 'launcher_profiles.json');  patterns = @('"playerName"\s*:\s*"([^"]+)"', '"username"\s*:\s*"([^"]+)"', '"displayName"\s*:\s*"([^"]+)"') },
+    @{ path = (Join-Path $mc 'launcher_accounts.json');  patterns = @('"name"\s*:\s*"([^"]+)"', '"username"\s*:\s*"([^"]+)"') }
+  )
+  foreach ($jf in $jsonFiles) {
+    if (Test-Path -LiteralPath $jf.path) {
+      $sources.Add($jf.path) | Out-Null
+      $text = Read-TextFile $jf.path
+      if ($text) {
+        foreach ($pat in $jf.patterns) {
+          $ms = [regex]::Matches($text, $pat)
+          foreach ($m in $ms) { Add-Nick $m.Groups[1].Value $jf.path }
         }
       }
     }
   }
+
+  # 3) shig.inima (una riga = un nick)
+  $shig = Join-Path $mc 'shig.inima'
+  if (Test-Path -LiteralPath $shig) {
+    $sources.Add($shig) | Out-Null
+    $text = Read-TextFile $shig
+    if ($text) {
+      foreach ($line in ($text -split "`n")) {
+        $t = $line.Trim()
+        if ($t) { Add-Nick $t $shig }
+      }
+    }
+  }
+
   $np = @{}
   foreach ($k in $nickPaths.Keys) { $np[$k] = @($nickPaths[$k]) }
   @{ accounts = @($accounts); sources = @($sources); nickPaths = $np; error = $null }
 } catch {
   @{ accounts = @(); sources = @(); nickPaths = @{}; error = "$($_.Exception.Message)" }
+}
+'@
+
+$script:journalCode = @'
+try {
+  $temp = Join-Path $env:TEMP 'coralmc_usn.txt'
+  try { if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue } } catch { }
+  $pipeline = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /C:".log.gz" /C:"launcher_profiles.json" /C:"usernamecache.json" /C:"usercache.json" /C:"shig.inima" /C:"launcher_accounts.json" > "' + $temp + '"'
+  $isAdmin = $false
+  try {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $wp = New-Object Security.Principal.WindowsPrincipal($id)
+    $isAdmin = $wp.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  } catch { }
+  if ($isAdmin) {
+    cmd.exe /c $pipeline | Out-Null
+  } else {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'cmd.exe'
+    $psi.Arguments = '/c ' + $pipeline
+    $psi.UseShellExecute = $true
+    $psi.Verb = 'runas'
+    $p = [System.Diagnostics.Process]::Start($psi)
+    if (-not $p.WaitForExit(300000)) { try { $p.Kill() } catch { } }
+  }
+  $lines = @()
+  if (Test-Path -LiteralPath $temp) {
+    $lines = @(Get-Content -LiteralPath $temp -ErrorAction SilentlyContinue | Where-Object { $_ -and $_.Trim() })
+  }
+  @{ lines = $lines; error = $null }
+} catch {
+  @{ lines = @(); error = "$($_.Exception.Message)" }
 }
 '@
 
@@ -111,7 +185,7 @@ try {
         <ScrollViewer VerticalScrollBarVisibility="Auto">
           <StackPanel Margin="22,18,22,20">
             <TextBlock Text="Select Data Source" Foreground="#e5e7eb" FontSize="15" FontWeight="Bold"/>
-            <TextBlock Text="Scansione esclusiva dei 'Setting user:' nei log di Minecraft." Foreground="#8b98ab" FontSize="12" Margin="0,2,0,14"/>
+            <TextBlock Text="Log, cache, launcher e file eliminati: tutte le fonti." Foreground="#8b98ab" FontSize="12" Margin="0,2,0,14"/>
             <Border x:Name="rowLogs" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,10" Cursor="Hand">
               <DockPanel Margin="12">
                 <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="19" Background="#173049">
@@ -119,8 +193,8 @@ try {
                 </Border>
                 <TextBlock x:Name="arrL" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                  <TextBlock Text="LOGS DI MINECRAFT" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
-                  <TextBlock Text="Cerca tutti i 'Setting user:' (anche nei .gz)" Foreground="#8b98ab" FontSize="11"/>
+                  <TextBlock Text="SCANSIONE COMPLETA" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
+                  <TextBlock Text="Log 'Setting user:' (anche .gz) + usernamecache, usercache, launcher_profiles/accounts, shig.inima" Foreground="#8b98ab" FontSize="11"/>
                 </StackPanel>
               </DockPanel>
             </Border>
@@ -132,7 +206,7 @@ try {
                 <TextBlock x:Name="arrJ" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                   <TextBlock Text="Journal" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
-                  <TextBlock Text="Il comando appare nel cmd: premi Invio per avviarlo (Admin)" Foreground="#8b98ab" FontSize="11"/>
+                  <TextBlock Text="Cerca i file di Minecraft ELIMINATI (USN Journal, serve Admin)" Foreground="#8b98ab" FontSize="11"/>
                 </StackPanel>
               </DockPanel>
             </Border>
@@ -160,9 +234,9 @@ try {
           <TextBlock Text="Scanning..." Foreground="#8b98ab" FontSize="12" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,14,0,0"/>
           <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
             <Grid x:Name="spinGrid" Width="70" Height="70" HorizontalAlignment="Center">
-              <Ellipse Width="70" Height="70" Stroke="#38bdf8" StrokeThickness="6" StrokeDashArray="165 55" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="Transparent"/>
+              <Ellipse Width="70" Height="70" Stroke="#38bdf8" StrokeThickness="6" StrokeDashArray="27.5 9.17" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="Transparent"/>
             </Grid>
-            <TextBlock x:Name="txtScanStatus" Text="Minecraft Scan: cartella logs..." Foreground="#8b98ab" FontSize="12" HorizontalAlignment="Center" Margin="0,18,0,0"/>
+            <TextBlock x:Name="txtScanStatus" Text="Minecraft Scan..." Foreground="#8b98ab" FontSize="12" HorizontalAlignment="Center" Margin="0,18,0,0"/>
           </StackPanel>
           <Button x:Name="btnCancel" Content="Cancel" Width="120" Height="34" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,20" Style="{StaticResource DarkBtn}" FontSize="12"/>
         </Grid>
@@ -180,12 +254,13 @@ try {
             <Button x:Name="btnBack" DockPanel.Dock="Left" Content="&lt; Back" Width="70" Height="32" Style="{StaticResource DarkBtn}"/>
             <StackPanel Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center">
               <TextBlock Text="Scan Results   |" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
-              <TextBlock Text="[Setting user only]" Foreground="#4ade80" FontSize="13" FontWeight="Bold" Margin="6,0,0,0"/>
+              <TextBlock Text="[Log + Cache + Launcher]" Foreground="#4ade80" FontSize="13" FontWeight="Bold" Margin="6,0,0,0"/>
             </StackPanel>
           </DockPanel>
           <StackPanel Orientation="Horizontal" Margin="12,0,12,12">
             <Button x:Name="btnTabAcc" Content="Accounts Found" Width="140" Height="30" Style="{StaticResource DarkBtn}" FontWeight="Bold" FontSize="12"/>
             <Button x:Name="btnTabFor" Content="Forensics" Width="100" Height="30" Margin="6,0,0,0" Style="{StaticResource DarkBtn}" FontWeight="Bold" FontSize="12"/>
+            <Button x:Name="btnTabJou" Content="Journal" Width="90" Height="30" Margin="6,0,0,0" Style="{StaticResource DarkBtn}" FontWeight="Bold" FontSize="12"/>
           </StackPanel>
         </StackPanel>
       </Border>
@@ -262,7 +337,7 @@ function Start-MinecraftScan {
   (C 'pnlHome').Visibility = [System.Windows.Visibility]::Collapsed
   (C 'pnlResults').Visibility = [System.Windows.Visibility]::Collapsed
   (C 'pnlScan').Visibility = [System.Windows.Visibility]::Visible
-  (C 'txtScanStatus').Text = 'Minecraft Scan: cartella logs (%APPDATA%\.minecraft\logs)...'
+  (C 'txtScanStatus').Text = 'Scansione completa: log, cache e launcher...'
   Start-Spinner
 
   try {
@@ -314,7 +389,7 @@ function Start-MinecraftScan {
       (C 'pnlResults').Visibility = [System.Windows.Visibility]::Visible
       Show-Tab 'acc'
     } else {
-      $msg = 'Errore durante la scansione dei log.'
+      $msg = 'Errore durante la scansione.'
       if ($data -and $data['error']) { $msg += "`n" + [string]$data['error'] }
       [System.Windows.MessageBox]::Show($msg, 'Errore', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
       Show-Home
@@ -323,63 +398,75 @@ function Start-MinecraftScan {
   $script:scanTimer.Start()
 }
 
-function Cancel-Scan {
-  if ($script:scanTimer) { $script:scanTimer.Stop() }
-  try { if ($script:scanJob) { Stop-Job -Job $script:scanJob | Out-Null; Remove-Job -Job $script:scanJob -Force } } catch { }
-  $script:scanJob = $null
+function Finish-Journal($data) {
   Stop-Spinner
-  Show-Home
-}
-
-function Cleanup-Journal {
-  try { if ($script:jPS) { $script:jPS.Stop(); $script:jPS.Dispose() } } catch { }
-  $script:jPS = $null
-  $script:jAsync = $null
+  (C 'pnlScan').Visibility = [System.Windows.Visibility]::Collapsed
+  $script:journalLines = New-Object System.Collections.Generic.List[string]
+  $script:journalError = $null
+  if ($data) {
+    if ($data['error']) { $script:journalError = [string]$data['error'] }
+    foreach ($l in @($data['lines'])) { if ($l) { $script:journalLines.Add($l) | Out-Null } }
+  }
+  (C 'pnlResults').Visibility = [System.Windows.Visibility]::Visible
+  Show-Tab 'jou'
 }
 
 function Run-Journal {
-  if ($script:jTimer -and $script:jTimer.IsEnabled) { return }
+  if ($script:journalJob) { return }
+  (C 'pnlHome').Visibility = [System.Windows.Visibility]::Collapsed
+  (C 'pnlResults').Visibility = [System.Windows.Visibility]::Collapsed
+  (C 'pnlScan').Visibility = [System.Windows.Visibility]::Visible
+  (C 'txtScanStatus').Text = 'Journal: lettura USN Journal di C: (consenti UAC, puo richiedere qualche minuto)...'
+  Start-Spinner
 
-  $script:jCmd = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
-  $script:jDesktop = [Environment]::GetFolderPath('Desktop')
-
-  # Stampa il comando nella console da cui e' partito lo script (solo testo a video, nessuna API sospetta)
   try {
-    [Console]::Out.Write("`n--- Journal ---`nPremi INVIO in questa console per eseguire (serve Amministratore):`n" + $script:jCmd + "`n")
-    [Console]::Out.Flush()
+    $script:journalJob = Start-Job -ScriptBlock ([scriptblock]::Create($script:journalCode))
   } catch {
-    try { [System.Windows.Clipboard]::SetText($script:jCmd) } catch { }
-    [System.Windows.MessageBox]::Show("Comando copiato negli appunti: incollalo nel cmd e premi Invio.", "Journal", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+    $script:journalJob = $null
+  }
+
+  if (-not $script:journalJob) {
+    $data = $null
+    try { $data = & ([scriptblock]::Create($script:journalCode)) } catch { $data = $null }
+    Finish-Journal $data
     return
   }
 
-  # Aspetta in background che l'utente prema Invio nella console
-  try {
-    $script:jPS = [powershell]::Create()
-    $script:jPS.AddScript({ [Console]::In.ReadLine() }) | Out-Null
-    $script:jAsync = $script:jPS.BeginInvoke()
-  } catch {
-    Cleanup-Journal
-    return
-  }
+  $script:journalTimer = New-Object System.Windows.Threading.DispatcherTimer
+  $script:journalTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+  $script:journalTimer.Add_Tick({
+    $j = $script:journalJob
+    if (-not $j) { $script:journalTimer.Stop(); return }
+    if ($j.State -eq 'Running') { return }
+    $script:journalTimer.Stop()
 
-  $script:jTimer = New-Object System.Windows.Threading.DispatcherTimer
-  $script:jTimer.Interval = [TimeSpan]::FromMilliseconds(150)
-  $script:jTimer.Add_Tick({
-    if ($script:jAsync -and $script:jAsync.IsCompleted) {
-      $script:jTimer.Stop()
-      Cleanup-Journal
-      try {
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = 'cmd.exe'
-        $psi.Arguments = '/c cd /d "' + $script:jDesktop + '" && ' + $script:jCmd
-        $psi.UseShellExecute = $false
-        $psi.WorkingDirectory = $script:jDesktop
-        [void][System.Diagnostics.Process]::Start($psi)
-      } catch { }
+    $data = $null
+    try {
+      if ($j.State -eq 'Completed') {
+        $data = Receive-Job -Job $j
+        if ($data -is [System.Management.Automation.PSObject]) { $data = $data.BaseObject }
+      }
+    } catch { $data = $null }
+    try { Remove-Job -Job $j -Force } catch { }
+    $script:journalJob = $null
+
+    if (-not $data) {
+      try { $data = & ([scriptblock]::Create($script:journalCode)) } catch { $data = $null }
     }
+    Finish-Journal $data
   })
-  $script:jTimer.Start()
+  $script:journalTimer.Start()
+}
+
+function Cancel-Scan {
+  if ($script:scanTimer) { $script:scanTimer.Stop() }
+  if ($script:journalTimer) { $script:journalTimer.Stop() }
+  try { if ($script:scanJob) { Stop-Job -Job $script:scanJob | Out-Null; Remove-Job -Job $script:scanJob -Force } } catch { }
+  try { if ($script:journalJob) { Stop-Job -Job $script:journalJob | Out-Null; Remove-Job -Job $script:journalJob -Force } } catch { }
+  $script:scanJob = $null
+  $script:journalJob = $null
+  Stop-Spinner
+  Show-Home
 }
 
 function Open-Cestino {
@@ -420,7 +507,7 @@ function New-LogRow($path) {
   $left.Orientation = [System.Windows.Controls.Orientation]::Horizontal
   $left.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
   $lbl = New-Object System.Windows.Controls.TextBlock
-  $lbl.Text = 'Log File'; $lbl.Foreground = Brush '#64748b'; $lbl.FontSize = 11
+  $lbl.Text = 'Source'; $lbl.Foreground = Brush '#64748b'; $lbl.FontSize = 11
   $sep = New-Object System.Windows.Controls.TextBlock
   $sep.Text = '  |  '; $sep.Foreground = Brush '#334155'; $sep.FontSize = 11
   $pth = New-Object System.Windows.Controls.TextBlock
@@ -506,39 +593,39 @@ function Add-NickRow($nick, $panel) {
 function Show-Tab($which) {
   $accent = Brush '#38bdf8'; $darktxt = Brush '#04121f'; $btnbg = Brush '#16233a'
   $sub = Brush '#8b98ab'; $txt = Brush '#e5e7eb'
-  $acc = C 'btnTabAcc'; $for = C 'btnTabFor'
-  if ($which -eq 'acc') {
-    $acc.Background = $accent; $acc.Foreground = $darktxt
-    $for.Background = $btnbg; $for.Foreground = $sub
-  } else {
-    $for.Background = $accent; $for.Foreground = $darktxt
-    $acc.Background = $btnbg; $acc.Foreground = $sub
-  }
+  $acc = C 'btnTabAcc'; $for = C 'btnTabFor'; $jou = C 'btnTabJou'
+  foreach ($b in @($acc, $for, $jou)) { $b.Background = $btnbg; $b.Foreground = $sub }
+  if ($which -eq 'acc') { $acc.Background = $accent; $acc.Foreground = $darktxt }
+  elseif ($which -eq 'for') { $for.Background = $accent; $for.Foreground = $darktxt }
+  else { $jou.Background = $accent; $jou.Foreground = $darktxt }
+
   $panel = C 'pnlContent'
   $panel.Children.Clear()
+
   if ($which -eq 'acc') {
     $h = New-Object System.Windows.Controls.TextBlock
-    $h.Text = ([string][char]0x25BC) + '   Setting user:   (' + $script:accounts.Count + ')'
+    $h.Text = ([string][char]0x25BC) + '   Accounts trovati:   (' + $script:accounts.Count + ')'
     $h.Foreground = $txt; $h.FontSize = 13; $h.FontWeight = [System.Windows.FontWeights]::Bold
     $h.Margin = '4,6,4,2'
     $panel.Children.Add($h) | Out-Null
     $hint = New-Object System.Windows.Controls.TextBlock
-    $hint.Text = 'Click sinistro sul nick: espandi/comprimi  |  Click destro sul log: copia/apri'
+    $hint.Text = 'Click sinistro sul nick: espandi/comprimi  |  Click destro sul file: copia/apri'
     $hint.Foreground = Brush '#64748b'; $hint.FontSize = 10; $hint.Margin = '6,0,4,6'
     $panel.Children.Add($hint) | Out-Null
     if ($script:accounts.Count -eq 0) {
       $e = New-Object System.Windows.Controls.TextBlock
-      $e.Text = 'Nessun Setting user trovato nei log.'
+      $e.Text = 'Nessun account trovato nelle fonti scansionate.'
       $e.Foreground = $sub; $e.FontSize = 12; $e.Margin = '8,4,8,4'
       $panel.Children.Add($e) | Out-Null
     }
     foreach ($nick in $script:accounts) {
       Add-NickRow $nick $panel
     }
-  } else {
+  }
+  elseif ($which -eq 'for') {
     if ($script:sources.Count -eq 0) {
       $e = New-Object System.Windows.Controls.TextBlock
-      $e.Text = 'Nessun file di log trovato.'
+      $e.Text = 'Nessuna fonte trovata.'
       $e.Foreground = $sub; $e.FontSize = 12; $e.Margin = '8,4,8,4'
       $panel.Children.Add($e) | Out-Null
     }
@@ -549,16 +636,54 @@ function Show-Tab($which) {
       $panel.Children.Add($row) | Out-Null
     }
   }
+  else {
+    $h = New-Object System.Windows.Controls.TextBlock
+    $h.Text = ([string][char]0x25BC) + '   File di Minecraft eliminati (USN Journal):   (' + $script:journalLines.Count + ')'
+    $h.Foreground = $txt; $h.FontSize = 13; $h.FontWeight = [System.Windows.FontWeights]::Bold
+    $h.Margin = '4,6,4,2'
+    $panel.Children.Add($h) | Out-Null
+    $hint = New-Object System.Windows.Controls.TextBlock
+    $hint.Text = 'Voci con motivo 0x80000200 (eliminazione) nel USN Journal di C:.'
+    $hint.Foreground = Brush '#64748b'; $hint.FontSize = 10; $hint.Margin = '6,0,4,6'
+    $panel.Children.Add($hint) | Out-Null
+    if ($script:journalLines.Count -eq 0) {
+      $e = New-Object System.Windows.Controls.TextBlock
+      if ($script:journalError) {
+        $e.Text = 'Errore: ' + $script:journalError
+      } else {
+        $e.Text = 'Nessun file eliminato trovato. (Serve il consenso UAC/Amministratore.)'
+      }
+      $e.Foreground = $sub; $e.FontSize = 12; $e.Margin = '8,4,8,4'
+      $e.TextWrapping = [System.Windows.TextWrapping]::Wrap
+      $panel.Children.Add($e) | Out-Null
+    }
+    foreach ($l in $script:journalLines) {
+      $name = $l
+      $idx = $l.LastIndexOf(',')
+      if ($idx -ge 0 -and $idx -lt ($l.Length - 1)) { $name = $l.Substring($idx + 1) }
+      $sp = New-Object System.Windows.Controls.StackPanel
+      $sp.Margin = '10,2,8,2'
+      $t1 = New-Object System.Windows.Controls.TextBlock
+      $t1.Text = ([string][char]0x2716) + '  ' + $name
+      $t1.Foreground = Brush '#f87171'; $t1.FontSize = 12
+      $t2 = New-Object System.Windows.Controls.TextBlock
+      $t2.Text = $l
+      $t2.Foreground = Brush '#475569'; $t2.FontSize = 9
+      $t2.TextWrapping = [System.Windows.TextWrapping]::Wrap
+      [void]$sp.Children.Add($t1); [void]$sp.Children.Add($t2)
+      $panel.Children.Add($sp) | Out-Null
+    }
+  }
 }
 
 function Show-Info {
   [xml]$ix = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        Title="Info" Width="380" Height="260" Background="#0f172a"
+        Title="Info" Width="400" Height="280" Background="#0f172a"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize" FontFamily="Segoe UI">
   <StackPanel Margin="20">
     <TextBlock Text="CoralMC Alts Checker" Foreground="#38bdf8" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,10,0,8"/>
-    <TextBlock Foreground="#8b98ab" FontSize="12" TextWrapping="Wrap" Text="Scansiona SOLO le righe 'Setting user:' nei log di Minecraft (anche .gz). Ignora cache, launcher e chat."/>
+    <TextBlock Foreground="#8b98ab" FontSize="12" TextWrapping="Wrap" Text="Come il checker di shawnfroste: log 'Setting user:' (anche .gz), usernamecache, usercache, launcher_profiles/accounts, shig.inima e file eliminati via USN Journal. Con la grafica CoralMC."/>
     <TextBlock Text="Made by CallMeDen_" Foreground="#8b98ab" FontSize="11" HorizontalAlignment="Center" Margin="0,18,0,0"/>
   </StackPanel>
 </Window>
@@ -571,16 +696,18 @@ function Show-Info {
 (C 'btnInfo').Add_Click({ Show-Info })
 (C 'rowLogs').Add_MouseLeftButtonUp({ Start-MinecraftScan })
 (C 'btnAnalyze').Add_Click({ Start-MinecraftScan })
-(C 'btnCancel').Add_Click({ Cancel-Scan })
 (C 'rowJournal').Add_MouseLeftButtonUp({ Run-Journal })
 (C 'rowCestino').Add_MouseLeftButtonUp({ Open-Cestino })
+(C 'btnCancel').Add_Click({ Cancel-Scan })
 (C 'btnBack').Add_Click({ Show-Home })
 (C 'btnTabAcc').Add_Click({ Show-Tab 'acc' })
 (C 'btnTabFor').Add_Click({ Show-Tab 'for' })
+(C 'btnTabJou').Add_Click({ Show-Tab 'jou' })
 $window.Add_Closed({
   try { if ($script:scanJob) { Remove-Job -Job $script:scanJob -Force } } catch { }
-  try { if ($script:jTimer) { $script:jTimer.Stop() } } catch { }
-  Cleanup-Journal
+  try { if ($script:journalJob) { Remove-Job -Job $script:journalJob -Force } } catch { }
+  try { if ($script:scanTimer) { $script:scanTimer.Stop() } } catch { }
+  try { if ($script:journalTimer) { $script:journalTimer.Stop() } } catch { }
 })
 
 $window.ShowDialog() | Out-Null
