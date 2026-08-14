@@ -6,53 +6,55 @@ $script:accounts = New-Object System.Collections.Generic.List[string]
 $script:seen = New-Object System.Collections.Generic.HashSet[string]
 $script:sources = New-Object System.Collections.Generic.List[string]
 $script:nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
-$script:scanPS = $null
-$script:scanRS = $null
-$script:scanAsync = $null
+$script:scanJob = $null
 $script:scanTimer = $null
 
 function Brush($hex) { return (New-Object System.Windows.Media.BrushConverter).ConvertFromString($hex) }
 
 $scanCode = @'
-function Read-TextFile($path) { try { return [System.IO.File]::ReadAllText($path) } catch { return $null } }
-function Read-GzFile($path) {
-  try {
-    $fs = [System.IO.File]::OpenRead($path)
-    $gz = New-Object System.IO.Compression.GZipStream($fs, [System.IO.Compression.CompressionMode]::Decompress)
-    $sr = New-Object System.IO.StreamReader($gz, [System.Text.Encoding]::UTF8)
-    $t = $sr.ReadToEnd()
-    $sr.Close(); $gz.Close(); $fs.Close()
-    return $t
-  } catch { return $null }
-}
-$accounts = New-Object System.Collections.Generic.List[string]
-$seen = New-Object System.Collections.Generic.HashSet[string]
-$sources = New-Object System.Collections.Generic.List[string]
-$nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
-$mc = Join-Path $env:APPDATA '.minecraft'
-$logsDir = Join-Path $mc 'logs'
-if (Test-Path -LiteralPath $logsDir) {
-  $files = @(Get-ChildItem -LiteralPath $logsDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.log$' -or $_.Name -match '\.log\.gz$' })
-  foreach ($f in $files) {
-    $sources.Add($f.FullName) | Out-Null
-    $text = if ($f.Name.EndsWith('.gz')) { Read-GzFile $f.FullName } else { Read-TextFile $f.FullName }
-    if ($text) {
-      $ms = [regex]::Matches($text, '(?m)Setting user:\s*(\S+)')
-      foreach ($m in $ms) {
-        $nick = $m.Groups[1].Value.Trim()
-        $key = $nick.ToLower()
-        if ($nick -and $seen.Add($key)) { $accounts.Add($nick) | Out-Null }
-        if ($nick) {
-          if (-not $nickPaths.ContainsKey($key)) { $nickPaths[$key] = New-Object 'System.Collections.Generic.List[string]' }
-          if (-not $nickPaths[$key].Contains($f.FullName)) { $nickPaths[$key].Add($f.FullName) | Out-Null }
+try {
+  function Read-TextFile($path) { try { return [System.IO.File]::ReadAllText($path) } catch { return $null } }
+  function Read-GzFile($path) {
+    try {
+      $fs = [System.IO.File]::OpenRead($path)
+      $gz = New-Object System.IO.Compression.GZipStream($fs, [System.IO.Compression.CompressionMode]::Decompress)
+      $sr = New-Object System.IO.StreamReader($gz, [System.Text.Encoding]::UTF8)
+      $t = $sr.ReadToEnd()
+      $sr.Close(); $gz.Close(); $fs.Close()
+      return $t
+    } catch { return $null }
+  }
+  $accounts = New-Object System.Collections.Generic.List[string]
+  $seen = New-Object System.Collections.Generic.HashSet[string]
+  $sources = New-Object System.Collections.Generic.List[string]
+  $nickPaths = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]'
+  $mc = Join-Path $env:APPDATA '.minecraft'
+  $logsDir = Join-Path $mc 'logs'
+  if (Test-Path -LiteralPath $logsDir) {
+    $files = @(Get-ChildItem -LiteralPath $logsDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.log$' -or $_.Name -match '\.log\.gz$' })
+    foreach ($f in $files) {
+      $sources.Add($f.FullName) | Out-Null
+      $text = if ($f.Name.EndsWith('.gz')) { Read-GzFile $f.FullName } else { Read-TextFile $f.FullName }
+      if ($text) {
+        $ms = [regex]::Matches($text, '(?m)Setting user:\s*(\S+)')
+        foreach ($m in $ms) {
+          $nick = $m.Groups[1].Value.Trim()
+          $key = $nick.ToLower()
+          if ($nick -and $seen.Add($key)) { $accounts.Add($nick) | Out-Null }
+          if ($nick) {
+            if (-not $nickPaths.ContainsKey($key)) { $nickPaths[$key] = New-Object 'System.Collections.Generic.List[string]' }
+            if (-not $nickPaths[$key].Contains($f.FullName)) { $nickPaths[$key].Add($f.FullName) | Out-Null }
+          }
         }
       }
     }
   }
+  $np = @{}
+  foreach ($k in $nickPaths.Keys) { $np[$k] = @($nickPaths[$k]) }
+  @{ accounts = @($accounts); sources = @($sources); nickPaths = $np; error = $null }
+} catch {
+  @{ accounts = @(); sources = @(); nickPaths = @{}; error = "$($_.Exception.Message)" }
 }
-$np = @{}
-foreach ($k in $nickPaths.Keys) { $np[$k] = @($nickPaths[$k]) }
-@{ accounts = @($accounts); sources = @($sources); nickPaths = $np }
 '@
 
 [xml]$xaml = @"
@@ -155,7 +157,7 @@ foreach ($k in $nickPaths.Keys) { $np[$k] = @($nickPaths[$k]) }
           <TextBlock Text="Scanning..." Foreground="#8b98ab" FontSize="12" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,14,0,0"/>
           <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
             <Grid x:Name="spinGrid" Width="70" Height="70" HorizontalAlignment="Center">
-              <Ellipse Width="70" Height="70" Stroke="#38bdf8" StrokeThickness="6" StrokeDashArray="25.1 8.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="Transparent"/>
+              <Ellipse Width="70" Height="70" Stroke="#38bdf8" StrokeThickness="6" StrokeDashArray="165 55" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="Transparent"/>
             </Grid>
             <TextBlock x:Name="txtScanStatus" Text="Minecraft Scan: cartella logs..." Foreground="#8b98ab" FontSize="12" HorizontalAlignment="Center" Margin="0,18,0,0"/>
           </StackPanel>
@@ -210,9 +212,7 @@ function Show-Home {
 
 function Start-Spinner {
   $grid = C 'spinGrid'
-  if ($null -eq $grid.RenderTransform -or $grid.RenderTransform -isnot [System.Windows.Media.RotateTransform]) {
-    $grid.RenderTransform = New-Object System.Windows.Media.RotateTransform(0, 35, 35)
-  }
+  $grid.RenderTransform = New-Object System.Windows.Media.RotateTransform(0, 35, 35)
   $anim = New-Object System.Windows.Media.Animation.DoubleAnimation(0, 360, [TimeSpan]::FromMilliseconds(900))
   $anim.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
   $grid.RenderTransform.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $anim)
@@ -223,12 +223,6 @@ function Stop-Spinner {
   if ($grid.RenderTransform -is [System.Windows.Media.RotateTransform]) {
     $grid.RenderTransform.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $null)
   }
-}
-
-function Cleanup-ScanResources {
-  try { if ($script:scanPS) { $script:scanPS.Dispose() } } catch { }
-  try { if ($script:scanRS) { $script:scanRS.Close() } } catch { }
-  $script:scanPS = $null; $script:scanRS = $null; $script:scanAsync = $null
 }
 
 function Apply-ScanResults($data) {
@@ -247,60 +241,86 @@ function Apply-ScanResults($data) {
   if ($np) {
     foreach ($k in $np.Keys) {
       $lst = New-Object 'System.Collections.Generic.List[string]'
-      foreach ($p in @($np[$k])) { $lst.Add($p) | Out-Null }
+      foreach ($p in @($np[$k])) { if ($p) { $lst.Add($p) | Out-Null } }
       $script:nickPaths[$k] = $lst
     }
   }
 }
 
 function Start-MinecraftScan {
-  if ($script:scanTimer -and $script:scanTimer.IsEnabled) { return }
+  if ($script:scanJob) { return }
   (C 'pnlHome').Visibility = [System.Windows.Visibility]::Collapsed
   (C 'pnlResults').Visibility = [System.Windows.Visibility]::Collapsed
   (C 'pnlScan').Visibility = [System.Windows.Visibility]::Visible
   (C 'txtScanStatus').Text = 'Minecraft Scan: cartella logs (%APPDATA%\.minecraft\logs)...'
   Start-Spinner
 
-  $script:scanPS = [powershell]::Create()
-  $script:scanPS.AddScript($scanCode) | Out-Null
-  $script:scanRS = [runspacefactory]::CreateRunspace()
-  $script:scanRS.Open()
-  $script:scanPS.Runspace = $script:scanRS
-  $script:scanAsync = $script:scanPS.BeginInvoke()
+  try {
+    $script:scanJob = Start-Job -ScriptBlock ([scriptblock]::Create($scanCode))
+  } catch {
+    $script:scanJob = $null
+  }
 
   $script:scanTimer = New-Object System.Windows.Threading.DispatcherTimer
   $script:scanTimer.Interval = [TimeSpan]::FromMilliseconds(200)
   $script:scanTimer.Add_Tick({
-    if ($script:scanAsync -and $script:scanAsync.IsCompleted) {
-      $script:scanTimer.Stop()
-      $ok = $true; $data = $null
-      try {
-        $out = $script:scanPS.EndInvoke($script:scanAsync)
-        if ($out -and $out.Count -gt 0) {
-          $data = $out[0]
-          if ($data -is [System.Management.Automation.PSObject]) { $data = $data.BaseObject }
-        } else { $ok = $false }
-      } catch { $ok = $false }
-      Cleanup-ScanResources
-      Stop-Spinner
-      (C 'pnlScan').Visibility = [System.Windows.Visibility]::Collapsed
-      if ($ok -and $data) {
-        Apply-ScanResults $data
-        (C 'pnlResults').Visibility = [System.Windows.Visibility]::Visible
-        Show-Tab 'acc'
-      } else {
-        [System.Windows.MessageBox]::Show('Errore durante la scansione dei log.', 'Errore', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
-        Show-Home
+    $j = $script:scanJob
+    if (-not $j) { $script:scanTimer.Stop(); return }
+    if ($j.State -eq 'Running') { return }
+    $script:scanTimer.Stop()
+
+    $data = $null
+    try {
+      if ($j.State -eq 'Completed') {
+        $data = Receive-Job -Job $j
+        if ($data -is [System.Management.Automation.PSObject]) { $data = $data.BaseObject }
+        if ($data -and $data['error']) { $data = $null }
       }
+    } catch { $data = $null }
+    try { Remove-Job -Job $j -Force } catch { }
+    $script:scanJob = $null
+
+    if (-not $data) {
+      # Fallback sincrono: garantisce comunque il risultato
+      try { $data = & ([scriptblock]::Create($scanCode)) } catch { $data = $null }
+    }
+
+    Stop-Spinner
+    (C 'pnlScan').Visibility = [System.Windows.Visibility]::Collapsed
+    if ($data -and -not $data['error']) {
+      Apply-ScanResults $data
+      (C 'pnlResults').Visibility = [System.Windows.Visibility]::Visible
+      Show-Tab 'acc'
+    } else {
+      $msg = 'Errore durante la scansione dei log.'
+      if ($data -and $data['error']) { $msg += "`n" + [string]$data['error'] }
+      [System.Windows.MessageBox]::Show($msg, 'Errore', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+      Show-Home
     }
   })
   $script:scanTimer.Start()
+
+  # Se il job non e' partito, il timer fa comunque il fallback sincrono al primo tick
+  if (-not $script:scanJob) {
+    $script:scanTimer.Stop()
+    $data = $null
+    try { $data = & ([scriptblock]::Create($scanCode)) } catch { $data = $null }
+    Stop-Spinner
+    (C 'pnlScan').Visibility = [System.Windows.Visibility]::Collapsed
+    if ($data -and -not $data['error']) {
+      Apply-ScanResults $data
+      (C 'pnlResults').Visibility = [System.Windows.Visibility]::Visible
+      Show-Tab 'acc'
+    } else {
+      Show-Home
+    }
+  }
 }
 
 function Cancel-Scan {
   if ($script:scanTimer) { $script:scanTimer.Stop() }
-  try { if ($script:scanPS) { $script:scanPS.Stop() } } catch { }
-  Cleanup-ScanResources
+  try { if ($script:scanJob) { Stop-Job -Job $script:scanJob | Out-Null; Remove-Job -Job $script:scanJob -Force } } catch { }
+  $script:scanJob = $null
   Stop-Spinner
   Show-Home
 }
@@ -503,6 +523,6 @@ function Show-Info {
 (C 'btnBack').Add_Click({ Show-Home })
 (C 'btnTabAcc').Add_Click({ Show-Tab 'acc' })
 (C 'btnTabFor').Add_Click({ Show-Tab 'for' })
-$window.Add_Closed({ try { if ($script:scanPS) { $script:scanPS.Stop() } } catch { } })
+$window.Add_Closed({ try { if ($script:scanJob) { Remove-Job -Job $script:scanJob -Force } } catch { } })
 
 $window.ShowDialog() | Out-Null
