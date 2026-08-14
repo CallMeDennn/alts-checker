@@ -19,6 +19,20 @@ function Brush($hex) { return (New-Object System.Windows.Media.BrushConverter).C
 
 $script:scanCode = @'
 try {
+  $progressFile = Join-Path $env:TEMP 'coralmc_progress.txt'
+  $progressTmp = Join-Path $env:TEMP 'coralmc_progress.tmp'
+  function Update-Progress($percent, $action, $processed, $total, $elapsed) {
+    try {
+      $elapsedInt = [math]::Round($elapsed)
+      $str = "$percent|$action|$processed|$total|$elapsedInt"
+      [System.IO.File]::WriteAllText($progressTmp, $str)
+      Move-Item -LiteralPath $progressTmp -Destination $progressFile -Force -ErrorAction SilentlyContinue
+    } catch {}
+  }
+  
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  Update-Progress 0 "Inizializzazione..." 0 1 $sw.Elapsed.TotalSeconds
+
   function Read-TextFile($path) { try { return [System.IO.File]::ReadAllText($path) } catch { return $null } }
   function Read-GzFile($path) {
     try {
@@ -49,11 +63,36 @@ try {
   }
   $mc = Join-Path $env:APPDATA '.minecraft'
 
-  # 1) LOGS (Setting user:, anche .gz)
+  $filesToProcess = @()
   $logsDir = Join-Path $mc 'logs'
+  if (Test-Path -LiteralPath $logsDir) {
+    $filesToProcess += @(Get-ChildItem -LiteralPath $logsDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.log$' -or $_.Name -match '\.log\.gz$' })
+  }
+  
+  $jsonFiles = @(
+    @{ path = (Join-Path $mc 'usernamecache.json');      patterns = @('"[^"]+"\s*:\s*"([^"]+)"') },
+    @{ path = (Join-Path $mc 'usercache.json');          patterns = @('"name"\s*:\s*"([^"]+)"') },
+    @{ path = (Join-Path $mc 'launcher_profiles.json');  patterns = @('"playerName"\s*:\s*"([^"]+)"', '"username"\s*:\s*"([^"]+)"', '"displayName"\s*:\s*"([^"]+)"') },
+    @{ path = (Join-Path $mc 'launcher_accounts.json');  patterns = @('"name"\s*:\s*"([^"]+)"', '"username"\s*:\s*"([^"]+)"') }
+  )
+  foreach ($jf in $jsonFiles) {
+    if (Test-Path -LiteralPath $jf.path) { $filesToProcess += $jf }
+  }
+  
+  $shig = Join-Path $mc 'shig.inima'
+  if (Test-Path -LiteralPath $shig) { $filesToProcess += @{ path = $shig; isShig = $true } }
+
+  $totalFiles = $filesToProcess.Count
+  if ($totalFiles -eq 0) { $totalFiles = 1 }
+  $processed = 0
+
+  # 1) LOGS (Setting user:, anche .gz)
   if (Test-Path -LiteralPath $logsDir) {
     $files = @(Get-ChildItem -LiteralPath $logsDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.log$' -or $_.Name -match '\.log\.gz$' })
     foreach ($f in $files) {
+      $processed++
+      $pct = [math]::Round(($processed / $totalFiles) * 100)
+      Update-Progress $pct "Scansione logs: $($f.Name)" $processed $totalFiles $sw.Elapsed.TotalSeconds
       $sources.Add($f.FullName) | Out-Null
       $text = if ($f.Name.EndsWith('.gz')) { Read-GzFile $f.FullName } else { Read-TextFile $f.FullName }
       if ($text) {
@@ -64,14 +103,11 @@ try {
   }
 
   # 2) CACHE / LAUNCHER
-  $jsonFiles = @(
-    @{ path = (Join-Path $mc 'usernamecache.json');      patterns = @('"[^"]+"\s*:\s*"([^"]+)"') },
-    @{ path = (Join-Path $mc 'usercache.json');          patterns = @('"name"\s*:\s*"([^"]+)"') },
-    @{ path = (Join-Path $mc 'launcher_profiles.json');  patterns = @('"playerName"\s*:\s*"([^"]+)"', '"username"\s*:\s*"([^"]+)"', '"displayName"\s*:\s*"([^"]+)"') },
-    @{ path = (Join-Path $mc 'launcher_accounts.json');  patterns = @('"name"\s*:\s*"([^"]+)"', '"username"\s*:\s*"([^"]+)"') }
-  )
   foreach ($jf in $jsonFiles) {
     if (Test-Path -LiteralPath $jf.path) {
+      $processed++
+      $pct = [math]::Round(($processed / $totalFiles) * 100)
+      Update-Progress $pct "Scansione cache: $(Split-Path $jf.path -Leaf)" $processed $totalFiles $sw.Elapsed.TotalSeconds
       $sources.Add($jf.path) | Out-Null
       $text = Read-TextFile $jf.path
       if ($text) {
@@ -84,8 +120,10 @@ try {
   }
 
   # 3) shig.inima (una riga = un nick)
-  $shig = Join-Path $mc 'shig.inima'
   if (Test-Path -LiteralPath $shig) {
+    $processed++
+    $pct = [math]::Round(($processed / $totalFiles) * 100)
+    Update-Progress $pct "Scansione shig.inima" $processed $totalFiles $sw.Elapsed.TotalSeconds
     $sources.Add($shig) | Out-Null
     $text = Read-TextFile $shig
     if ($text) {
@@ -95,6 +133,8 @@ try {
       }
     }
   }
+
+  Update-Progress 100 "Completato" $totalFiles $totalFiles $sw.Elapsed.TotalSeconds
 
   $np = @{}
   foreach ($k in $nickPaths.Keys) { $np[$k] = @($nickPaths[$k]) }
@@ -234,11 +274,19 @@ try {
       <Border Background="#0f172a" CornerRadius="12" BorderBrush="#1e293b" BorderThickness="1">
         <Grid>
           <TextBlock Text="Scanning..." Foreground="#8b98ab" FontSize="12" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,14,0,0"/>
-          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="400">
             <Grid x:Name="spinGrid" Width="70" Height="70" HorizontalAlignment="Center">
               <Ellipse Width="70" Height="70" Stroke="#38bdf8" StrokeThickness="6" StrokeDashArray="27.5 9.17" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="Transparent"/>
             </Grid>
-            <TextBlock x:Name="txtScanStatus" Text="Minecraft Scan..." Foreground="#8b98ab" FontSize="12" HorizontalAlignment="Center" Margin="0,18,0,0"/>
+            <TextBlock x:Name="txtScanStatus" Text="Minecraft Scan..." Foreground="#8b98ab" FontSize="12" HorizontalAlignment="Center" Margin="0,18,0,12"/>
+            <Grid Width="360" Height="16" Margin="0,0,0,8">
+              <Border Background="#1e293b" CornerRadius="8"/>
+              <Border x:Name="progressFill" Background="#38bdf8" CornerRadius="8" HorizontalAlignment="Left" Width="0"/>
+            </Grid>
+            <DockPanel Width="360" Margin="0,4,0,0">
+              <TextBlock x:Name="txtProgressPct" Text="0%" Foreground="#e5e7eb" FontSize="12" FontWeight="Bold" DockPanel.Dock="Left"/>
+              <TextBlock x:Name="txtProgressEta" Text="" Foreground="#8b98ab" FontSize="11" DockPanel.Dock="Right" HorizontalAlignment="Right"/>
+            </DockPanel>
           </StackPanel>
           <Button x:Name="btnCancel" Content="Cancel" Width="120" Height="34" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,20" Style="{StaticResource DarkBtn}" FontSize="12"/>
         </Grid>
@@ -373,12 +421,56 @@ function Search-Account($term) {
   return $found
 }
 
+function Update-ProgressUI {
+  $progressFile = Join-Path $env:TEMP 'coralmc_progress.txt'
+  if (Test-Path -LiteralPath $progressFile) {
+    try {
+      $content = [System.IO.File]::ReadAllText($progressFile)
+      $parts = $content -split '\|'
+      if ($parts.Count -ge 5) {
+        $pct = [int]$parts[0]
+        $action = $parts[1]
+        $processed = [int]$parts[2]
+        $total = [int]$parts[3]
+        $elapsed = [int]$parts[4]
+        
+        (C 'txtScanStatus').Text = $action
+        (C 'txtProgressPct').Text = "$pct%"
+        
+        $maxWidth = 360.0
+        $newWidth = ($pct / 100.0) * $maxWidth
+        (C 'progressFill').Width = $newWidth
+        
+        if ($pct -gt 0 -and $pct -lt 100) {
+          $remaining = ($elapsed / $pct) * (100 - $pct)
+          $eta = [TimeSpan]::FromSeconds($remaining)
+          $etaStr = ""
+          if ($eta.TotalHours -ge 1) { $etaStr += "$([math]::Floor($eta.TotalHours))h " }
+          if ($eta.Minutes -gt 0 -or $eta.TotalHours -ge 1) { $etaStr += "$($eta.Minutes)m " }
+          $etaStr += "$($eta.Seconds)s"
+          (C 'txtProgressEta').Text = "Tempo rimanente: $etaStr"
+        } else {
+          (C 'txtProgressEta').Text = ""
+        }
+      }
+    } catch {}
+  }
+}
+
 function Start-MinecraftScan {
   if ($script:scanJob) { return }
   (C 'pnlHome').Visibility = [System.Windows.Visibility]::Collapsed
   (C 'pnlResults').Visibility = [System.Windows.Visibility]::Collapsed
   (C 'pnlScan').Visibility = [System.Windows.Visibility]::Visible
-  (C 'txtScanStatus').Text = 'Scansione completa: log, cache e launcher...'
+  
+  (C 'txtScanStatus').Text = 'Inizializzazione scansione...'
+  (C 'txtProgressPct').Text = '0%'
+  (C 'txtProgressEta').Text = ''
+  (C 'progressFill').Width = 0
+  
+  $progressFile = Join-Path $env:TEMP 'coralmc_progress.txt'
+  try { if (Test-Path -LiteralPath $progressFile) { Remove-Item -LiteralPath $progressFile -Force -ErrorAction SilentlyContinue } } catch {}
+
   Start-Spinner
 
   try {
@@ -405,6 +497,9 @@ function Start-MinecraftScan {
   $script:scanTimer.Add_Tick({
     $j = $script:scanJob
     if (-not $j) { $script:scanTimer.Stop(); return }
+    
+    Update-ProgressUI
+
     if ($j.State -eq 'Running') { return }
     $script:scanTimer.Stop()
 
@@ -458,6 +553,9 @@ function Run-Journal {
   (C 'pnlResults').Visibility = [System.Windows.Visibility]::Collapsed
   (C 'pnlScan').Visibility = [System.Windows.Visibility]::Visible
   (C 'txtScanStatus').Text = 'Journal: lettura USN Journal di C: (consenti UAC, puo richiedere qualche minuto)...'
+  (C 'txtProgressPct').Text = '0%'
+  (C 'txtProgressEta').Text = ''
+  (C 'progressFill').Width = 0
   Start-Spinner
 
   try {
