@@ -51,7 +51,7 @@ function Invoke-Scan {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="CoralMC Alts Checker" Width="640" Height="640"
+        Title="CoralMC Alts Checker" Width="640" Height="720"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         Background="#0a0f1a" FontFamily="Segoe UI">
   <Window.Resources>
@@ -95,27 +95,49 @@ function Invoke-Scan {
     </StackPanel>
     <Grid x:Name="pnlHome" Grid.Row="1" Margin="26,6,26,6">
       <Border Background="#0f172a" CornerRadius="12" BorderBrush="#1e293b" BorderThickness="1">
-        <StackPanel Margin="22,18,22,20">
-          <TextBlock Text="Select Data Source" Foreground="#e5e7eb" FontSize="15" FontWeight="Bold"/>
-          <TextBlock Text="Scansione esclusiva dei 'Setting user:' nei log di Minecraft." Foreground="#8b98ab" FontSize="12" Margin="0,2,0,14"/>
-          <Border x:Name="rowLogs" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,10" Cursor="Hand">
-            <DockPanel Margin="12">
-              <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="19" Background="#173049">
-                <TextBlock Text="L" Foreground="#38bdf8" FontSize="15" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
-              <TextBlock x:Name="arrL" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
-              <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                <TextBlock Text="LOGS DI MINECRAFT" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
-                <TextBlock Text="Cerca tutti i 'Setting user:' (anche nei .gz)" Foreground="#8b98ab" FontSize="11"/>
-              </StackPanel>
-            </DockPanel>
-          </Border>
-          <Button x:Name="btnAnalyze" Content="Analizza dati caricati" Height="42" Margin="0,6,0,10" Style="{StaticResource DarkBtn}" FontSize="13" FontWeight="Bold"/>
-          <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-            <Button x:Name="btnJournal" Content="Journal" Width="120" Height="38" Style="{StaticResource DarkBtn}" FontSize="12" FontWeight="Bold" Margin="0,0,8,0"/>
-            <Button x:Name="btnCestino" Content="Cestino" Width="120" Height="38" Style="{StaticResource DarkBtn}" FontSize="12" FontWeight="Bold"/>
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,0,0,0">
+          <StackPanel Margin="22,18,22,20">
+            <TextBlock Text="Select Data Source" Foreground="#e5e7eb" FontSize="15" FontWeight="Bold"/>
+            <TextBlock Text="Scansione esclusiva dei 'Setting user:' nei log di Minecraft." Foreground="#8b98ab" FontSize="12" Margin="0,2,0,14"/>
+            <Border x:Name="rowLogs" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,10" Cursor="Hand">
+              <DockPanel Margin="12">
+                <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="19" Background="#173049">
+                  <TextBlock Text="L" Foreground="#38bdf8" FontSize="15" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock x:Name="arrL" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
+                <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                  <TextBlock Text="LOGS DI MINECRAFT" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
+                  <TextBlock Text="Cerca tutti i 'Setting user:' (anche nei .gz)" Foreground="#8b98ab" FontSize="11"/>
+                </StackPanel>
+              </DockPanel>
+            </Border>
+            <Button x:Name="btnAnalyze" Content="Analizza dati caricati" Height="42" Margin="0,0,0,14" Style="{StaticResource DarkBtn}" FontSize="13" FontWeight="Bold"/>
+            <Border x:Name="Journal" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,10" Cursor="Hand">
+              <DockPanel Margin="12">
+                <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="19" Background="#3b2a14">
+                  <TextBlock Text="J" Foreground="#fbbf24" FontSize="15" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock x:Name="arrJ" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
+                <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                  <TextBlock Text="USN JOURNAL" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
+                  <TextBlock Text="Lettura journal (richiede Admin) + export in logs.txt" Foreground="#8b98ab" FontSize="11"/>
+                </StackPanel>
+              </DockPanel>
+            </Border>
+            <Border x:Name="Cestino" Background="#131f33" CornerRadius="10" BorderBrush="#1e293b" BorderThickness="1" Margin="0,0,0,0" Cursor="Hand">
+              <DockPanel Margin="12">
+                <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="19" Background="#3a1515">
+                  <TextBlock Text="C" Foreground="#f87171" FontSize="15" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock x:Name="arrC" DockPanel.Dock="Right" Text=">" Foreground="#8b98ab" FontSize="14" VerticalAlignment="Center" Margin="14,0,4,0"/>
+                <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                  <TextBlock Text="CESTINO" Foreground="#e5e7eb" FontSize="13" FontWeight="Bold"/>
+                  <TextBlock Text="Apri la cartella C:\$Recycle.Bin" Foreground="#8b98ab" FontSize="11"/>
+                </StackPanel>
+              </DockPanel>
+            </Border>
           </StackPanel>
-        </StackPanel>
+        </ScrollViewer>
       </Border>
     </Grid>
     <Grid x:Name="pnlResults" Grid.Row="1" Margin="26,6,26,6" Visibility="Collapsed">
@@ -153,6 +175,8 @@ $window = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader
 function C($name) { return $window.FindName($name) }
 
 (C 'arrL').Text = [string][char]0x25B8
+(C 'arrJ').Text = [string][char]0x25B8
+(C 'arrC').Text = [string][char]0x25B8
 
 function Show-Home {
   (C 'pnlResults').Visibility = [System.Windows.Visibility]::Collapsed
@@ -215,11 +239,20 @@ function Run-Analysis {
 
 function Run-Journal {
   $cmd = 'fsutil usn readjournal C: csv | findstr /i /C:"0x80000200" | findstr /i /C:"latest.log" /i /C:".log.gz" /i /C:"launcher_profiles.json" /i /C:"usernamecache.json" /i /C:"usercache.json" /i /C:"shig.inima" /i /C:"launcher_accounts.json" > logs.txt'
-  Start-Process cmd -ArgumentList "/k", $cmd
+  # Avvia CMD come amministratore con il comando gia' pronto
+  try {
+    Start-Process cmd -Verb RunAs -ArgumentList "/k", $cmd
+  } catch {
+    [System.Windows.MessageBox]::Show("Impossibile avviare CMD come amministratore: $($_.Exception.Message)", "Errore", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+  }
 }
 
 function Open-Cestino {
-  Start-Process "C:\`$Recycle.Bin"
+  try {
+    Start-Process "C:\`$Recycle.Bin"
+  } catch {
+    Start-Process explorer "C:\`$Recycle.Bin"
+  }
 }
 
 function Show-Info {
@@ -242,8 +275,8 @@ function Show-Info {
 (C 'btnInfo').Add_Click({ Show-Info })
 (C 'rowLogs').Add_MouseLeftButtonUp({ Run-Analysis })
 (C 'btnAnalyze').Add_Click({ Run-Analysis })
-(C 'btnJournal').Add_Click({ Run-Journal })
-(C 'btnCestino').Add_Click({ Open-Cestino })
+(C 'Journal').Add_MouseLeftButtonUp({ Run-Journal })
+(C 'Cestino').Add_MouseLeftButtonUp({ Open-Cestino })
 (C 'btnBack').Add_Click({ Show-Home })
 (C 'btnTabAcc').Add_Click({ Show-Tab 'acc' })
 (C 'btnTabFor').Add_Click({ Show-Tab 'for' })
